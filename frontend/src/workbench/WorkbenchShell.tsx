@@ -76,6 +76,11 @@ type ClientFilterState = {
   keyword: string;
 };
 
+type ToastState = {
+  message: string;
+  visible: boolean;
+};
+
 const initialRows: WorkbenchRow[] = [
   {
     id: "WI-10031",
@@ -149,6 +154,19 @@ const trackedClientFields: ClientEditableColumnKey[] = [
   "updatedAt"
 ];
 
+const WORK_ITEM_PAGE_SIZE = 5;
+const AUDIT_LOG_PAGE_SIZE = 8;
+
+const auditFieldLabels: Record<string, string> = {
+  client: "업체명",
+  bizNo: "사업자번호",
+  workType: "업무유형",
+  status: "상태",
+  assignee: "담당자",
+  dueDate: "마감일",
+  updatedAt: "최근수정"
+};
+
 export function WorkbenchShell() {
   const [rows, setRows] = useState<WorkbenchRow[]>(initialRows);
   const [persistedRows, setPersistedRows] = useState<WorkbenchRow[]>(initialRows);
@@ -188,8 +206,12 @@ export function WorkbenchShell() {
   const [clientSaveSummary, setClientSaveSummary] = useState<SaveSummary | null>(null);
   const [clientDraftFilters, setClientDraftFilters] = useState<ClientFilterState>({ keyword: "" });
   const [clientAppliedFilters, setClientAppliedFilters] = useState<ClientFilterState>({ keyword: "" });
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const [workItemPage, setWorkItemPage] = useState(1);
+  const [auditLogPage, setAuditLogPage] = useState(1);
   const inputRefs = useRef<Record<string, HTMLInputElement | HTMLSelectElement | null>>({});
   const clientInputRefs = useRef<Record<string, HTMLInputElement | HTMLSelectElement | null>>({});
+  const workItemRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
   const formatUpdatedAt = (value: string) => {
     const parsedDate = new Date(value);
@@ -287,9 +309,27 @@ export function WorkbenchShell() {
     });
   }, [filteredClientRows, clientSortDirection, clientSortKey]);
 
+  const pagedWorkItemRows = useMemo(
+    () =>
+      sortedRows.slice(
+        (workItemPage - 1) * WORK_ITEM_PAGE_SIZE,
+        workItemPage * WORK_ITEM_PAGE_SIZE
+      ),
+    [sortedRows, workItemPage]
+  );
+
+  const pagedAuditLogs = useMemo(
+    () =>
+      auditLogs.slice(
+        (auditLogPage - 1) * AUDIT_LOG_PAGE_SIZE,
+        auditLogPage * AUDIT_LOG_PAGE_SIZE
+      ),
+    [auditLogs, auditLogPage]
+  );
+
   const visibleRowIds = useMemo(
-    () => sortedRows.map((row) => row.id),
-    [sortedRows]
+    () => pagedWorkItemRows.map((row) => row.id),
+    [pagedWorkItemRows]
   );
   const visibleClientRowIds = useMemo(
     () => sortedClientRows.map((row) => row.id),
@@ -323,14 +363,18 @@ export function WorkbenchShell() {
     }
 
     targetInput.focus();
-    if (targetInput instanceof HTMLInputElement) {
+    if (
+      targetInput instanceof HTMLInputElement &&
+      pendingFocusRowId === editingCell.rowId &&
+      editingCell.columnKey === "client"
+    ) {
       targetInput.select();
     }
 
     if (pendingFocusRowId === editingCell.rowId && editingCell.columnKey === "client") {
       setPendingFocusRowId(null);
     }
-  }, [editingCell, pendingFocusRowId, sortedRows]);
+  }, [editingCell, pendingFocusRowId]);
 
   useEffect(() => {
     if (!clientPendingFocusRowId) {
@@ -353,14 +397,18 @@ export function WorkbenchShell() {
     }
 
     targetInput.focus();
-    if (targetInput instanceof HTMLInputElement) {
+    if (
+      targetInput instanceof HTMLInputElement &&
+      clientPendingFocusRowId === clientEditingCell.rowId &&
+      clientEditingCell.columnKey === "name"
+    ) {
       targetInput.select();
     }
 
     if (clientPendingFocusRowId === clientEditingCell.rowId && clientEditingCell.columnKey === "name") {
       setClientPendingFocusRowId(null);
     }
-  }, [clientEditingCell, clientPendingFocusRowId, sortedClientRows]);
+  }, [clientEditingCell, clientPendingFocusRowId]);
 
   useEffect(() => {
     void fetchWorkItems({
@@ -379,10 +427,10 @@ export function WorkbenchShell() {
       return;
     }
 
-    if (!activeWorkItemId || !sortedRows.some((row) => row.id === activeWorkItemId)) {
-      setActiveWorkItemId(sortedRows[0].id);
+    if (!activeWorkItemId || !pagedWorkItemRows.some((row) => row.id === activeWorkItemId)) {
+      setActiveWorkItemId(pagedWorkItemRows[0]?.id ?? sortedRows[0].id);
     }
-  }, [activeWorkItemId, sortedRows]);
+  }, [activeWorkItemId, pagedWorkItemRows, sortedRows]);
 
   useEffect(() => {
     if (!activeWorkItemId) {
@@ -392,6 +440,43 @@ export function WorkbenchShell() {
 
     void fetchAuditLogs(activeWorkItemId);
   }, [activeWorkItemId]);
+
+  useEffect(() => {
+    if (!activeWorkItemId) {
+      return;
+    }
+
+    workItemRowRefs.current[activeWorkItemId]?.focus();
+  }, [activeWorkItemId, sortedRows]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(sortedRows.length / WORK_ITEM_PAGE_SIZE));
+    setWorkItemPage((current) => Math.min(current, totalPages));
+  }, [sortedRows.length]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(auditLogs.length / AUDIT_LOG_PAGE_SIZE));
+    setAuditLogPage((current) => Math.min(current, totalPages));
+  }, [auditLogs.length]);
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+
+    const fadeOutTimeoutId = window.setTimeout(() => {
+      setToast((current) => (current ? { ...current, visible: false } : null));
+    }, 1600);
+
+    const timeoutId = window.setTimeout(() => {
+      setToast(null);
+    }, 2000);
+
+    return () => {
+      window.clearTimeout(fadeOutTimeoutId);
+      window.clearTimeout(timeoutId);
+    };
+  }, [toast]);
 
   const handleSort = (columnKey: SortKey) => {
     if (sortKey === columnKey) {
@@ -593,6 +678,7 @@ export function WorkbenchShell() {
     setRows(hydrated);
     setPersistedRows(hydrated);
     setSelectedRowIds([]);
+    setWorkItemPage(1);
   };
 
   const fetchClients = async (keyword: string) => {
@@ -616,11 +702,13 @@ export function WorkbenchShell() {
 
     if (!response.ok) {
       setAuditLogs([]);
+      setAuditLogPage(1);
       return;
     }
 
     const payload = (await response.json()) as AuditLogRow[];
     setAuditLogs(hydrateAuditLogs(payload));
+    setAuditLogPage(1);
   };
 
   const handleSave = async () => {
@@ -712,6 +800,7 @@ export function WorkbenchShell() {
 
     await fetchWorkItems(appliedFilters);
     setSaveSummary({ added, updated, deleted: deletedRows.length });
+    setToast({ message: "저장되었습니다.", visible: true });
   };
 
   const handleClientSave = async () => {
@@ -756,6 +845,7 @@ export function WorkbenchShell() {
       current.filter((rowId) => savedRows.some((row) => row.id === rowId))
     );
     setClientSaveSummary({ added, updated, deleted });
+    setToast({ message: "저장되었습니다.", visible: true });
   };
 
   const handleActionClick = (action: (typeof actionButtons)[number]) => {
@@ -874,10 +964,13 @@ export function WorkbenchShell() {
       columnKey === "client" ||
       columnKey === "bizNo" ||
       columnKey === "assignee";
+    const isClientColumn = columnKey === "client";
+    const cellAlignmentClass = isClientColumn ? "text-left" : "text-center";
+    const contentAlignmentClass = isClientColumn ? "" : "justify-center";
 
     if (isEditing) {
       return (
-        <div className="min-h-10 w-full rounded-lg px-2 py-2 text-left">
+        <div className={`min-h-10 w-full rounded-lg px-2 py-2 ${cellAlignmentClass}`}>
           {columnKey === "workType" ? (
             <select
               ref={(element) => {
@@ -891,7 +984,7 @@ export function WorkbenchShell() {
                   handleCellCommit();
                 }
               }}
-              className="w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none"
+              className={`w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none ${cellAlignmentClass}`}
             >
               {workTypeOptions.map((option) => (
                 <option key={option} value={option}>
@@ -913,7 +1006,7 @@ export function WorkbenchShell() {
                   handleCellCommit();
                 }
               }}
-              className="w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none"
+              className={`w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none ${cellAlignmentClass}`}
             />
           ) : (
             <input
@@ -929,7 +1022,7 @@ export function WorkbenchShell() {
                   handleCellCommit();
                 }
               }}
-              className="w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none"
+              className={`w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none ${cellAlignmentClass}`}
             />
           )}
         </div>
@@ -940,7 +1033,7 @@ export function WorkbenchShell() {
       <button
         type="button"
         onClick={() => handleCellClick(row.id, columnKey)}
-        className={`min-h-10 w-full rounded-lg px-2 py-2 text-left transition ${isReadOnlyColumn ? "cursor-default" : "hover:bg-amber-50"}`}
+        className={`min-h-10 w-full rounded-lg px-2 py-2 transition ${cellAlignmentClass} ${contentAlignmentClass} ${isReadOnlyColumn ? "cursor-default" : "hover:bg-amber-50"}`}
       >
         <span className={`${columnKey === "client" ? "font-medium" : ""} ${isReadOnlyColumn ? "text-amber-700" : ""}`}>
           {row[columnKey] || "-"}
@@ -954,6 +1047,9 @@ export function WorkbenchShell() {
     const refKey = `${row.id}:${columnKey}`;
     const isSelectColumn =
       columnKey === "type" || columnKey === "status" || columnKey === "tier";
+    const isNameColumn = columnKey === "name";
+    const cellAlignmentClass = isNameColumn ? "text-left" : "text-center";
+    const contentAlignmentClass = isNameColumn ? "" : "justify-center";
     const options =
       columnKey === "type"
         ? clientTypeOptions
@@ -963,7 +1059,7 @@ export function WorkbenchShell() {
 
     if (isEditing) {
       return (
-        <div className="min-h-10 w-full rounded-lg px-2 py-2 text-left">
+        <div className={`min-h-10 w-full rounded-lg px-2 py-2 ${cellAlignmentClass}`}>
           {isSelectColumn ? (
             <select
               ref={(element) => {
@@ -977,7 +1073,7 @@ export function WorkbenchShell() {
                   handleClientCellCommit();
                 }
               }}
-              className="w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none"
+              className={`w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none ${cellAlignmentClass}`}
             >
               {options.map((option) => (
                 <option key={option} value={option}>
@@ -993,13 +1089,15 @@ export function WorkbenchShell() {
               value={row[columnKey]}
               onChange={(event) => handleClientCellChange(row.id, columnKey, event.target.value)}
               onBlur={handleClientCellCommit}
-              maxLength={columnKey === "bizNo" ? 12 : undefined}
+              maxLength={
+                columnKey === "name" ? 100 : columnKey === "bizNo" ? 12 : undefined
+              }
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === "Escape") {
                   handleClientCellCommit();
                 }
               }}
-              className="w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none"
+              className={`w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none ${cellAlignmentClass}`}
             />
           )}
         </div>
@@ -1010,7 +1108,7 @@ export function WorkbenchShell() {
       <button
         type="button"
         onClick={() => handleClientCellClick(row.id, columnKey)}
-        className="min-h-10 w-full rounded-lg px-2 py-2 text-left transition hover:bg-amber-50"
+        className={`min-h-10 w-full rounded-lg px-2 py-2 transition hover:bg-amber-50 ${cellAlignmentClass} ${contentAlignmentClass}`}
       >
         <span className={columnKey === "name" ? "font-medium" : ""}>{row[columnKey] || "-"}</span>
       </button>
@@ -1046,7 +1144,7 @@ export function WorkbenchShell() {
       {
         accessorKey: "client",
         header: () => (
-          <button type="button" onClick={() => handleSort("client")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleSort("client")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>업체명</span>
             <span className="text-[10px] text-stone-300">{sortIndicator("client")}</span>
           </button>
@@ -1057,71 +1155,95 @@ export function WorkbenchShell() {
       {
         accessorKey: "bizNo",
         header: () => (
-          <button type="button" onClick={() => handleSort("bizNo")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleSort("bizNo")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>사업자번호</span>
             <span className="text-[10px] text-stone-300">{sortIndicator("bizNo")}</span>
           </button>
         ),
-        cell: ({ row }) => renderWorkbenchCell(row.original, "bizNo"),
+        cell: ({ row }) => (
+          <div className="flex justify-center text-center">
+            {renderWorkbenchCell(row.original, "bizNo")}
+          </div>
+        ),
         size: 170
       },
       {
         accessorKey: "workType",
         header: () => (
-          <button type="button" onClick={() => handleSort("workType")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleSort("workType")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>업무유형</span>
             <span className="text-[10px] text-stone-300">{sortIndicator("workType")}</span>
           </button>
         ),
-        cell: ({ row }) => renderWorkbenchCell(row.original, "workType"),
+        cell: ({ row }) => (
+          <div className="flex justify-center text-center">
+            {renderWorkbenchCell(row.original, "workType")}
+          </div>
+        ),
         size: 140
       },
       {
         accessorKey: "status",
         header: () => (
-          <button type="button" onClick={() => handleSort("status")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleSort("status")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>상태</span>
             <span className="text-[10px] text-stone-300">{sortIndicator("status")}</span>
           </button>
         ),
-        cell: ({ row }) => renderWorkbenchCell(row.original, "status"),
+        cell: ({ row }) => (
+          <div className="flex justify-center text-center">
+            {renderWorkbenchCell(row.original, "status")}
+          </div>
+        ),
         size: 130
       },
       {
         accessorKey: "assignee",
         header: () => (
-          <button type="button" onClick={() => handleSort("assignee")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleSort("assignee")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>담당자</span>
             <span className="text-[10px] text-stone-300">{sortIndicator("assignee")}</span>
           </button>
         ),
-        cell: ({ row }) => renderWorkbenchCell(row.original, "assignee"),
+        cell: ({ row }) => (
+          <div className="flex justify-center text-center">
+            {renderWorkbenchCell(row.original, "assignee")}
+          </div>
+        ),
         size: 120
       },
       {
         accessorKey: "dueDate",
         header: () => (
-          <button type="button" onClick={() => handleSort("dueDate")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleSort("dueDate")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>마감일</span>
             <span className="text-[10px] text-stone-300">{sortIndicator("dueDate")}</span>
           </button>
         ),
-        cell: ({ row }) => renderWorkbenchCell(row.original, "dueDate"),
+        cell: ({ row }) => (
+          <div className="flex justify-center text-center">
+            {renderWorkbenchCell(row.original, "dueDate")}
+          </div>
+        ),
         size: 140
       },
       {
         accessorKey: "updatedAt",
         header: () => (
-          <button type="button" onClick={() => handleSort("updatedAt")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleSort("updatedAt")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>최근수정</span>
             <span className="text-[10px] text-stone-300">{sortIndicator("updatedAt")}</span>
           </button>
         ),
-        cell: ({ row }) => renderWorkbenchCell(row.original, "updatedAt"),
+        cell: ({ row }) => (
+          <div className="flex justify-center text-center">
+            {renderWorkbenchCell(row.original, "updatedAt")}
+          </div>
+        ),
         size: 110
       }
     ],
-    [areAllRowsSelected, selectedRowIds, editingCell, sortKey, sortDirection, rows]
+    [areAllRowsSelected, selectedRowIds, editingCell, sortKey, sortDirection]
   );
 
   const clientTableColumns = useMemo<ColumnDef<ClientRow>[]>(
@@ -1153,75 +1275,95 @@ export function WorkbenchShell() {
       {
         accessorKey: "name",
         header: () => (
-          <button type="button" onClick={() => handleClientSort("name")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleClientSort("name")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>업체명</span>
             <span className="text-[10px] text-stone-300">{clientSortIndicator("name")}</span>
           </button>
         ),
         cell: ({ row }) => renderClientCell(row.original, "name"),
-        size: 220
+        size: 280
       },
       {
         accessorKey: "bizNo",
         header: () => (
-          <button type="button" onClick={() => handleClientSort("bizNo")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleClientSort("bizNo")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>사업자번호</span>
             <span className="text-[10px] text-stone-300">{clientSortIndicator("bizNo")}</span>
           </button>
         ),
-        cell: ({ row }) => renderClientCell(row.original, "bizNo"),
-        size: 180
+        cell: ({ row }) => (
+          <div className="flex justify-center text-center">
+            {renderClientCell(row.original, "bizNo")}
+          </div>
+        ),
+        size: 190
       },
       {
         accessorKey: "type",
         header: () => (
-          <button type="button" onClick={() => handleClientSort("type")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleClientSort("type")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>유형</span>
             <span className="text-[10px] text-stone-300">{clientSortIndicator("type")}</span>
           </button>
         ),
-        cell: ({ row }) => renderClientCell(row.original, "type"),
-        size: 120
+        cell: ({ row }) => (
+          <div className="flex justify-center text-center">
+            {renderClientCell(row.original, "type")}
+          </div>
+        ),
+        size: 110
       },
       {
         accessorKey: "status",
         header: () => (
-          <button type="button" onClick={() => handleClientSort("status")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleClientSort("status")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>상태</span>
             <span className="text-[10px] text-stone-300">{clientSortIndicator("status")}</span>
           </button>
         ),
-        cell: ({ row }) => renderClientCell(row.original, "status"),
-        size: 120
+        cell: ({ row }) => (
+          <div className="flex justify-center text-center">
+            {renderClientCell(row.original, "status")}
+          </div>
+        ),
+        size: 110
       },
       {
         accessorKey: "tier",
         header: () => (
-          <button type="button" onClick={() => handleClientSort("tier")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleClientSort("tier")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>등급</span>
             <span className="text-[10px] text-stone-300">{clientSortIndicator("tier")}</span>
           </button>
         ),
-        cell: ({ row }) => renderClientCell(row.original, "tier"),
-        size: 120
+        cell: ({ row }) => (
+          <div className="flex justify-center text-center">
+            {renderClientCell(row.original, "tier")}
+          </div>
+        ),
+        size: 110
       },
       {
         accessorKey: "updatedAt",
         header: () => (
-          <button type="button" onClick={() => handleClientSort("updatedAt")} className="flex items-center gap-2 text-left transition hover:text-amber-200">
+          <button type="button" onClick={() => handleClientSort("updatedAt")} className="flex w-full items-center justify-center gap-2 text-center transition hover:text-amber-200">
             <span>최근수정</span>
             <span className="text-[10px] text-stone-300">{clientSortIndicator("updatedAt")}</span>
           </button>
         ),
-        cell: ({ row }) => renderClientCell(row.original, "updatedAt"),
-        size: 110
+        cell: ({ row }) => (
+          <div className="flex justify-center text-center">
+            {renderClientCell(row.original, "updatedAt")}
+          </div>
+        ),
+        size: 150
       }
     ],
-    [areAllClientsSelected, selectedClientIds, clientEditingCell, clientSortKey, clientSortDirection, clientRows]
+    [areAllClientsSelected, selectedClientIds, clientEditingCell, clientSortKey, clientSortDirection]
   );
 
   const workItemTable = useReactTable({
-    data: sortedRows,
+    data: pagedWorkItemRows,
     columns: workItemColumns,
     getCoreRowModel: getCoreRowModel()
   });
@@ -1238,7 +1380,9 @@ export function WorkbenchShell() {
         accessorKey: "fieldName",
         header: "변경컬럼",
         cell: ({ row }) => (
-          <span className="font-medium text-stone-800">{row.original.fieldName || "-"}</span>
+          <span className="block text-center font-medium text-stone-800">
+            {auditFieldLabels[row.original.fieldName] ?? row.original.fieldName ?? "-"}
+          </span>
         ),
         size: 130
       },
@@ -1246,7 +1390,7 @@ export function WorkbenchShell() {
         accessorKey: "beforeValue",
         header: "이전값",
         cell: ({ row }) => (
-          <span className="text-stone-600">{row.original.beforeValue || "-"}</span>
+          <span className="block text-center text-stone-600">{row.original.beforeValue || "-"}</span>
         ),
         size: 170
       },
@@ -1254,7 +1398,7 @@ export function WorkbenchShell() {
         accessorKey: "afterValue",
         header: "이후값",
         cell: ({ row }) => (
-          <span className="text-stone-900">{row.original.afterValue || "-"}</span>
+          <span className="block text-center text-stone-900">{row.original.afterValue || "-"}</span>
         ),
         size: 170
       },
@@ -1262,23 +1406,28 @@ export function WorkbenchShell() {
         accessorKey: "changedAt",
         header: "변경시각",
         cell: ({ row }) => (
-          <span className="text-stone-600">{row.original.changedAt || "-"}</span>
+          <span className="block whitespace-nowrap text-center text-stone-600">
+            {row.original.changedAt || "-"}
+          </span>
         ),
-        size: 150
+        size: 170
       }
     ],
     []
   );
 
   const auditLogTable = useReactTable({
-    data: auditLogs,
+    data: pagedAuditLogs,
     columns: auditLogColumns,
     getCoreRowModel: getCoreRowModel()
   });
 
+  const workItemTotalPages = Math.max(1, Math.ceil(sortedRows.length / WORK_ITEM_PAGE_SIZE));
+  const auditLogTotalPages = Math.max(1, Math.ceil(auditLogs.length / AUDIT_LOG_PAGE_SIZE));
+
   return (
     <main className="min-h-screen px-4 py-6 text-stone-900 md:px-8">
-      <section className="mx-auto flex max-w-7xl flex-col gap-4">
+      <section className="mx-auto flex w-full max-w-[1840px] flex-col gap-4">
         <header className="rounded-[28px] border border-stone-300/70 bg-white/75 p-6 shadow-[0_18px_50px_rgba(120,94,58,0.12)] backdrop-blur">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
@@ -1300,7 +1449,7 @@ export function WorkbenchShell() {
           </div>
         </header>
 
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_520px] 2xl:grid-cols-[minmax(0,1fr)_560px]">
           <div className="rounded-[28px] border border-stone-300/70 bg-white/80 p-5 shadow-[0_16px_40px_rgba(98,76,48,0.08)] backdrop-blur">
             <div className="flex flex-col gap-4 border-b border-stone-200 pb-4 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex flex-wrap gap-2">
@@ -1323,7 +1472,7 @@ export function WorkbenchShell() {
                     />
                   ) : null}
                 </div>
-                <div className="relative">
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setShowStatusDropdown((current) => !current)}
@@ -1332,7 +1481,7 @@ export function WorkbenchShell() {
                     상태
                   </button>
                   {showStatusDropdown ? (
-                    <div className="absolute left-0 top-full z-10 mt-2 w-44 rounded-2xl border border-stone-200 bg-white p-2 shadow-lg">
+                    <div className="w-44 rounded-2xl border border-stone-200 bg-white p-2 shadow-lg">
                       <select
                         value={draftFilters.status}
                         onChange={(event) =>
@@ -1377,28 +1526,26 @@ export function WorkbenchShell() {
                       className="w-36 rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700 outline-none"
                     />
                   ) : null}
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setShowDueDateCalendar((current) => !current)}
-                      className="rounded-full border border-stone-300 bg-stone-50 px-4 py-2 text-sm font-medium text-stone-700 transition hover:border-amber-700 hover:text-amber-800"
-                    >
-                      마감일
-                    </button>
-                    {showDueDateCalendar ? (
-                      <div className="absolute left-0 top-full z-10 mt-2 rounded-2xl border border-stone-200 bg-white p-3 shadow-lg">
-                        <input
-                          type="date"
-                          value={draftFilters.dueDate}
-                          onChange={(event) => {
-                            setDraftFilters((current) => ({ ...current, dueDate: event.target.value }));
-                            setShowDueDateCalendar(false);
-                          }}
-                          className="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700 outline-none"
-                        />
-                      </div>
-                    ) : null}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowDueDateCalendar((current) => !current)}
+                    className="rounded-full border border-stone-300 bg-stone-50 px-4 py-2 text-sm font-medium text-stone-700 transition hover:border-amber-700 hover:text-amber-800"
+                  >
+                    마감일
+                  </button>
+                  {showDueDateCalendar ? (
+                    <div className="rounded-2xl border border-stone-200 bg-white p-3 shadow-lg">
+                      <input
+                        type="date"
+                        value={draftFilters.dueDate}
+                        onChange={(event) => {
+                          setDraftFilters((current) => ({ ...current, dueDate: event.target.value }));
+                          setShowDueDateCalendar(false);
+                        }}
+                        className="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700 outline-none"
+                      />
+                    </div>
+                  ) : null}
                 </div>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
@@ -1435,7 +1582,7 @@ export function WorkbenchShell() {
                     {workItemTable.getHeaderGroups().map((headerGroup) => (
                       <tr key={headerGroup.id}>
                         {headerGroup.headers.map((header) => (
-                          <th key={header.id} className="px-4 py-3 text-left" style={{ width: header.getSize() }}>
+                          <th key={header.id} className="px-4 py-3 text-center" style={{ width: header.getSize() }}>
                             {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                           </th>
                         ))}
@@ -1446,8 +1593,12 @@ export function WorkbenchShell() {
                     {workItemTable.getRowModel().rows.map((row, index) => (
                       <tr
                         key={row.id}
+                        ref={(element) => {
+                          workItemRowRefs.current[row.original.id] = element;
+                        }}
+                        tabIndex={0}
                         onClick={() => setActiveWorkItemId(row.original.id)}
-                        className={`cursor-pointer ${activeWorkItemId === row.original.id ? "bg-amber-50" : index % 2 === 1 ? "bg-stone-50" : "bg-white"}`}
+                        className={`cursor-pointer outline-none ${activeWorkItemId === row.original.id ? "bg-amber-50 ring-1 ring-inset ring-amber-300" : index % 2 === 1 ? "bg-stone-50" : "bg-white"} focus-visible:ring-2 focus-visible:ring-amber-400`}
                       >
                         {row.getVisibleCells().map((cell) => (
                           <td key={cell.id} className="px-4 py-2 align-middle" style={{ width: cell.column.getSize() }}>
@@ -1458,6 +1609,31 @@ export function WorkbenchShell() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div className="flex items-center justify-between border-t border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-600">
+                <span>
+                  페이지 {workItemPage} / {workItemTotalPages}
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setWorkItemPage((current) => Math.max(1, current - 1))}
+                    disabled={workItemPage === 1}
+                    className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    이전
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setWorkItemPage((current) => Math.min(workItemTotalPages, current + 1))
+                    }
+                    disabled={workItemPage === workItemTotalPages}
+                    className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    다음
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1480,31 +1656,58 @@ export function WorkbenchShell() {
             <div className="mt-4 overflow-hidden rounded-2xl border border-stone-200">
               {activeWorkItemId ? (
                 auditLogs.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full table-fixed border-collapse">
-                      <thead className="bg-stone-900 text-xs font-semibold tracking-[0.08em] text-stone-50">
-                        {auditLogTable.getHeaderGroups().map((headerGroup) => (
-                          <tr key={headerGroup.id}>
-                            {headerGroup.headers.map((header) => (
-                              <th key={header.id} className="px-4 py-3 text-left" style={{ width: header.getSize() }}>
-                                {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                              </th>
-                            ))}
-                          </tr>
-                        ))}
-                      </thead>
-                      <tbody className="divide-y divide-stone-200 text-sm text-stone-900">
-                        {auditLogTable.getRowModel().rows.map((row, index) => (
-                          <tr key={row.id} className={index % 2 === 1 ? "bg-stone-50" : "bg-white"}>
-                            {row.getVisibleCells().map((cell) => (
-                              <td key={cell.id} className="px-4 py-3 align-top" style={{ width: cell.column.getSize() }}>
-                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full table-fixed border-collapse">
+                        <thead className="bg-stone-900 text-xs font-semibold tracking-[0.08em] text-stone-50">
+                          {auditLogTable.getHeaderGroups().map((headerGroup) => (
+                            <tr key={headerGroup.id}>
+                              {headerGroup.headers.map((header) => (
+                                <th key={header.id} className="px-4 py-3 text-center" style={{ width: header.getSize() }}>
+                                  {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                                </th>
+                              ))}
+                            </tr>
+                          ))}
+                        </thead>
+                        <tbody className="divide-y divide-stone-200 text-sm text-stone-900">
+                          {auditLogTable.getRowModel().rows.map((row, index) => (
+                            <tr key={row.id} className={index % 2 === 1 ? "bg-stone-50" : "bg-white"}>
+                              {row.getVisibleCells().map((cell) => (
+                                <td key={cell.id} className="px-4 py-3 align-top" style={{ width: cell.column.getSize() }}>
+                                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-600">
+                      <span>
+                        페이지 {auditLogPage} / {auditLogTotalPages}
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setAuditLogPage((current) => Math.max(1, current - 1))}
+                          disabled={auditLogPage === 1}
+                          className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          이전
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAuditLogPage((current) => Math.min(auditLogTotalPages, current + 1))
+                          }
+                          disabled={auditLogPage === auditLogTotalPages}
+                          className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          다음
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <div className="px-4 py-10 text-sm text-stone-500">변경로그가 없습니다.</div>
@@ -1570,20 +1773,24 @@ export function WorkbenchShell() {
                 </div>
               ) : null}
 
-              <div className="mt-4 flex-1 overflow-auto rounded-2xl border border-stone-200">
-                <div className="overflow-x-auto">
+              <div className="mt-4 overflow-hidden rounded-2xl border border-stone-200">
+                <div className="overflow-x-auto border-b border-stone-200">
                   <table className="min-w-full table-fixed border-collapse">
                     <thead className="bg-stone-900 text-xs font-semibold tracking-[0.08em] text-stone-50">
                       {clientTable.getHeaderGroups().map((headerGroup) => (
                         <tr key={headerGroup.id}>
                           {headerGroup.headers.map((header) => (
-                            <th key={header.id} className="px-4 py-3 text-left" style={{ width: header.getSize() }}>
+                            <th key={header.id} className="px-4 py-3 text-center" style={{ width: header.getSize() }}>
                               {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                             </th>
                           ))}
                         </tr>
                       ))}
                     </thead>
+                  </table>
+                </div>
+                <div className="max-h-[265px] overflow-y-auto overflow-x-auto">
+                  <table className="min-w-full table-fixed border-collapse">
                     <tbody className="divide-y divide-stone-200 text-sm text-stone-900">
                       {clientTable.getRowModel().rows.map((row, index) => (
                         <tr key={row.id} className={index % 2 === 1 ? "bg-stone-50" : "bg-white"}>
@@ -1616,6 +1823,18 @@ export function WorkbenchShell() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {toast ? (
+        <div className="pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
+          <div
+            className={`rounded-full bg-stone-900 px-5 py-3 text-sm font-medium text-white shadow-[0_12px_30px_rgba(28,25,23,0.28)] transition-all duration-300 ${
+              toast.visible ? "translate-y-0 opacity-100" : "translate-y-3 opacity-0"
+            }`}
+          >
+            {toast.message}
           </div>
         </div>
       ) : null}

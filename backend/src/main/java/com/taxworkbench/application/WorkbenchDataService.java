@@ -64,7 +64,6 @@ public class WorkbenchDataService {
                 0L
         );
         WorkItemEntity saved = workItemRepository.save(entity);
-        recordAuditLogs(saved.getId(), saved.getRevision(), Map.of(), payload.toAuditMap(), payload.changedBy());
         return toWorkItemView(saved);
     }
 
