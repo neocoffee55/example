@@ -1,6 +1,3 @@
-com/taxworkbench/application/WorkbenchDataService.class
-com/taxworkbench/bootstrap/package-info.class
-com/taxworkbench/infrastructure/persistence/ClientJpaRepository.class
 com/taxworkbench/bootstrap/SeedDataConfig.class
 com/taxworkbench/application/WorkbenchDataService$WorkItemPayload.class
 com/taxworkbench/infrastructure/persistence/WorkItemAuditLogEntity.class
@@ -11,14 +8,16 @@ com/taxworkbench/interfaces/http/ClientController.class
 com/taxworkbench/interfaces/http/ApiExceptionHandler.class
 com/taxworkbench/application/WorkbenchDataService$ClientView.class
 com/taxworkbench/interfaces/http/WorkItemController.class
+com/taxworkbench/application/WorkbenchDataService.class
 com/taxworkbench/application/WorkbenchDataService$WorkItemView.class
 com/taxworkbench/infrastructure/persistence/WorkItemJpaRepository.class
 com/taxworkbench/application/WorkbenchDataService$WorkItemAuditView.class
+com/taxworkbench/bootstrap/package-info.class
 com/taxworkbench/TaxWorkbenchApplication.class
 com/taxworkbench/infrastructure/persistence/WorkItemEntity.class
 com/taxworkbench/application/package-info.class
+com/taxworkbench/infrastructure/persistence/ClientJpaRepository.class
 com/taxworkbench/infrastructure/package-info.class
-com/taxworkbench/interfaces/http/WorkbenchInfoController.class
 com/taxworkbench/infrastructure/persistence/ClientEntity.class
 com/taxworkbench/application/WorkbenchDataService$ClientPayload.class
 com/taxworkbench/interfaces/package-info.class
