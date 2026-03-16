@@ -190,7 +190,6 @@ export function WorkbenchShell() {
   const [persistedRows, setPersistedRows] = useState<WorkbenchRow[]>(initialRows);
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [activeWorkItemId, setActiveWorkItemId] = useState<string | null>(null);
-  const [activeBizNo, setActiveBizNo] = useState<string | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLogRow[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>("client");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
@@ -434,35 +433,23 @@ export function WorkbenchShell() {
   useEffect(() => {
     if (sortedRows.length === 0) {
       setActiveWorkItemId(null);
-      setActiveBizNo(null);
       setAuditLogs([]);
       return;
     }
 
     if (!activeWorkItemId || !sortedRows.some((row) => row.id === activeWorkItemId)) {
       setActiveWorkItemId(sortedRows[0].id);
-      setActiveBizNo(sortedRows[0].bizNo);
     }
   }, [activeWorkItemId, sortedRows]);
 
   useEffect(() => {
-    if (!activeBizNo) {
+    if (!activeWorkItemId) {
       setAuditLogs([]);
       return;
     }
 
-    void fetchAuditLogs(activeBizNo);
-  }, [activeBizNo]);
-
-  useEffect(() => {
-    if (!activeWorkItemId) {
-      setActiveBizNo(null);
-      return;
-    }
-
-    const activeRow = rows.find((row) => row.id === activeWorkItemId);
-    setActiveBizNo(activeRow?.bizNo ?? null);
-  }, [activeWorkItemId, rows]);
+    void fetchAuditLogs(activeWorkItemId);
+  }, [activeWorkItemId]);
 
   useEffect(() => {
     if (!activeWorkItemId) {
@@ -512,7 +499,6 @@ export function WorkbenchShell() {
 
   const handleActivateWorkItem = (row: WorkbenchRow) => {
     setActiveWorkItemId(row.id);
-    setActiveBizNo(row.bizNo);
   };
 
   const handleCellClick = (row: WorkbenchRow, columnKey: EditableColumnKey) => {
@@ -723,13 +709,8 @@ export function WorkbenchShell() {
     setSelectedClientIds([]);
   };
 
-  const fetchAuditLogs = async (bizNo: string) => {
-    const params = new URLSearchParams();
-    if (bizNo) {
-      params.set("bizNo", bizNo);
-    }
-
-    const response = await fetch(`${apiBaseUrl}/work-items/audit-logs?${params.toString()}`);
+  const fetchAuditLogs = async (workItemId: string) => {
+    const response = await fetch(`${apiBaseUrl}/work-items/${workItemId}/audit-logs`);
 
     if (!response.ok) {
       setAuditLogs([]);
@@ -857,11 +838,13 @@ export function WorkbenchShell() {
     }
 
     const refreshedRows = await fetchWorkItems(appliedFilters);
-    const refreshedActiveBizNo =
-      refreshedRows.find((row) => row.id === activeWorkItemId)?.bizNo ?? refreshedRows[0]?.bizNo;
+    const refreshedActiveWorkItemId =
+      refreshedRows.find((row) => row.id === activeWorkItemId)?.id ?? refreshedRows[0]?.id ?? null;
 
-    if (refreshedActiveBizNo) {
-      await fetchAuditLogs(refreshedActiveBizNo);
+    setActiveWorkItemId(refreshedActiveWorkItemId);
+
+    if (refreshedActiveWorkItemId) {
+      await fetchAuditLogs(refreshedActiveWorkItemId);
     } else {
       setAuditLogs([]);
       setAuditLogPage(1);
@@ -1770,11 +1753,11 @@ export function WorkbenchShell() {
               </p>
               <h2 className="mt-2 text-2xl font-semibold text-stone-900">변경로그</h2>
               <p className="mt-1 text-sm text-stone-600">
-                선택한 행의 사업자번호 기준으로 변경 컬럼, 이전값, 이후값을 표시합니다.
+                선택한 업무의 변경 컬럼, 이전값, 이후값을 표시합니다.
               </p>
               {activeWorkItemId ? (
                 <p className="mt-2 text-xs font-medium text-stone-500">
-                  선택된 법인등록번호: {activeBizNo ?? "-"}
+                  선택된 WorkItem ID: {activeWorkItemId}
                 </p>
               ) : null}
             </div>
