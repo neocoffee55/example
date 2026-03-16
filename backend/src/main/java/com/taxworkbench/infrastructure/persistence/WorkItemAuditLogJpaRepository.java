@@ -6,4 +6,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface WorkItemAuditLogJpaRepository extends JpaRepository<WorkItemAuditLogEntity, Long> {
 
     List<WorkItemAuditLogEntity> findByWorkItemIdOrderByChangedAtDesc(String workItemId);
+
+    List<WorkItemAuditLogEntity> findByWorkItemIdInOrderByChangedAtDesc(List<String> workItemIds);
 }

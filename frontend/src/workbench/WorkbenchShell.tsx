@@ -81,6 +81,25 @@ type ToastState = {
   visible: boolean;
 };
 
+type BulkInsertFailure = {
+  index: number;
+  workItemId: string;
+  reason: string;
+};
+
+type BulkInsertResult = {
+  totalCount: number;
+  successCount: number;
+  failureCount: number;
+  failures: BulkInsertFailure[];
+};
+
+type BulkFailureNotice = {
+  successCount: number;
+  failureCount: number;
+  failures: BulkInsertFailure[];
+};
+
 const initialRows: WorkbenchRow[] = [
   {
     id: "WI-10031",
@@ -154,7 +173,6 @@ const trackedClientFields: ClientEditableColumnKey[] = [
   "updatedAt"
 ];
 
-const WORK_ITEM_PAGE_SIZE = 5;
 const AUDIT_LOG_PAGE_SIZE = 8;
 
 const auditFieldLabels: Record<string, string> = {
@@ -172,12 +190,14 @@ export function WorkbenchShell() {
   const [persistedRows, setPersistedRows] = useState<WorkbenchRow[]>(initialRows);
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [activeWorkItemId, setActiveWorkItemId] = useState<string | null>(null);
+  const [activeBizNo, setActiveBizNo] = useState<string | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLogRow[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>("client");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const [pendingFocusRowId, setPendingFocusRowId] = useState<string | null>(null);
   const [saveSummary, setSaveSummary] = useState<SaveSummary | null>(null);
+  const [bulkFailureNotice, setBulkFailureNotice] = useState<BulkFailureNotice | null>(null);
   const [showClientModal, setShowClientModal] = useState(false);
   const [pendingClientAssignmentRowId, setPendingClientAssignmentRowId] = useState<string | null>(null);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
@@ -207,11 +227,11 @@ export function WorkbenchShell() {
   const [clientDraftFilters, setClientDraftFilters] = useState<ClientFilterState>({ keyword: "" });
   const [clientAppliedFilters, setClientAppliedFilters] = useState<ClientFilterState>({ keyword: "" });
   const [toast, setToast] = useState<ToastState | null>(null);
-  const [workItemPage, setWorkItemPage] = useState(1);
   const [auditLogPage, setAuditLogPage] = useState(1);
   const inputRefs = useRef<Record<string, HTMLInputElement | HTMLSelectElement | null>>({});
   const clientInputRefs = useRef<Record<string, HTMLInputElement | HTMLSelectElement | null>>({});
   const workItemRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+  const selectedRowIdsRef = useRef<string[]>([]);
 
   const formatUpdatedAt = (value: string) => {
     const parsedDate = new Date(value);
@@ -309,15 +329,6 @@ export function WorkbenchShell() {
     });
   }, [filteredClientRows, clientSortDirection, clientSortKey]);
 
-  const pagedWorkItemRows = useMemo(
-    () =>
-      sortedRows.slice(
-        (workItemPage - 1) * WORK_ITEM_PAGE_SIZE,
-        workItemPage * WORK_ITEM_PAGE_SIZE
-      ),
-    [sortedRows, workItemPage]
-  );
-
   const pagedAuditLogs = useMemo(
     () =>
       auditLogs.slice(
@@ -328,8 +339,8 @@ export function WorkbenchShell() {
   );
 
   const visibleRowIds = useMemo(
-    () => pagedWorkItemRows.map((row) => row.id),
-    [pagedWorkItemRows]
+    () => sortedRows.map((row) => row.id),
+    [sortedRows]
   );
   const visibleClientRowIds = useMemo(
     () => sortedClientRows.map((row) => row.id),
@@ -423,23 +434,35 @@ export function WorkbenchShell() {
   useEffect(() => {
     if (sortedRows.length === 0) {
       setActiveWorkItemId(null);
+      setActiveBizNo(null);
       setAuditLogs([]);
       return;
     }
 
-    if (!activeWorkItemId || !pagedWorkItemRows.some((row) => row.id === activeWorkItemId)) {
-      setActiveWorkItemId(pagedWorkItemRows[0]?.id ?? sortedRows[0].id);
+    if (!activeWorkItemId || !sortedRows.some((row) => row.id === activeWorkItemId)) {
+      setActiveWorkItemId(sortedRows[0].id);
+      setActiveBizNo(sortedRows[0].bizNo);
     }
-  }, [activeWorkItemId, pagedWorkItemRows, sortedRows]);
+  }, [activeWorkItemId, sortedRows]);
+
+  useEffect(() => {
+    if (!activeBizNo) {
+      setAuditLogs([]);
+      return;
+    }
+
+    void fetchAuditLogs(activeBizNo);
+  }, [activeBizNo]);
 
   useEffect(() => {
     if (!activeWorkItemId) {
-      setAuditLogs([]);
+      setActiveBizNo(null);
       return;
     }
 
-    void fetchAuditLogs(activeWorkItemId);
-  }, [activeWorkItemId]);
+    const activeRow = rows.find((row) => row.id === activeWorkItemId);
+    setActiveBizNo(activeRow?.bizNo ?? null);
+  }, [activeWorkItemId, rows]);
 
   useEffect(() => {
     if (!activeWorkItemId) {
@@ -448,11 +471,6 @@ export function WorkbenchShell() {
 
     workItemRowRefs.current[activeWorkItemId]?.focus();
   }, [activeWorkItemId, sortedRows]);
-
-  useEffect(() => {
-    const totalPages = Math.max(1, Math.ceil(sortedRows.length / WORK_ITEM_PAGE_SIZE));
-    setWorkItemPage((current) => Math.min(current, totalPages));
-  }, [sortedRows.length]);
 
   useEffect(() => {
     const totalPages = Math.max(1, Math.ceil(auditLogs.length / AUDIT_LOG_PAGE_SIZE));
@@ -478,6 +496,10 @@ export function WorkbenchShell() {
     };
   }, [toast]);
 
+  useEffect(() => {
+    selectedRowIdsRef.current = selectedRowIds;
+  }, [selectedRowIds]);
+
   const handleSort = (columnKey: SortKey) => {
     if (sortKey === columnKey) {
       setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
@@ -488,16 +510,24 @@ export function WorkbenchShell() {
     setSortDirection("asc");
   };
 
-  const handleCellClick = (rowId: string, columnKey: EditableColumnKey) => {
+  const handleActivateWorkItem = (row: WorkbenchRow) => {
+    setActiveWorkItemId(row.id);
+    setActiveBizNo(row.bizNo);
+  };
+
+  const handleCellClick = (row: WorkbenchRow, columnKey: EditableColumnKey) => {
+    handleActivateWorkItem(row);
+
     if (columnKey === "status" || columnKey === "client" || columnKey === "bizNo" || columnKey === "assignee") {
       return;
     }
 
-    setEditingCell({ rowId, columnKey });
+    setEditingCell({ rowId: row.id, columnKey });
   };
 
   const handleCellChange = (rowId: string, columnKey: EditableColumnKey, value: string) => {
     setSaveSummary(null);
+    setBulkFailureNotice(null);
     const normalizedValue =
       columnKey === "bizNo"
         ? maskBizNo(value)
@@ -532,6 +562,12 @@ export function WorkbenchShell() {
   };
 
   const handleClientCellClick = (rowId: string, columnKey: ClientEditableColumnKey) => {
+    const isPersistedBizNo =
+      columnKey === "bizNo" && persistedClientRows.some((row) => row.id === rowId);
+    if (isPersistedBizNo) {
+      return;
+    }
+
     setClientEditingCell({ rowId, columnKey });
   };
 
@@ -587,34 +623,23 @@ export function WorkbenchShell() {
   };
 
   const handleAddRow = () => {
-    const nextId = `WI-${Date.now()}`;
-    const newRow: WorkbenchRow = {
-      id: nextId,
-      revision: 0,
-      client: "",
-      bizNo: "",
-      workType: "FILING",
-      status: "TODO",
-      assignee: "insu",
-      dueDate: todayDate(),
-      updatedAt: formatUpdatedAt(new Date().toISOString())
-    };
-
     setSaveSummary(null);
-    setRows((currentRows) => [newRow, ...currentRows]);
-    setSelectedRowIds((current) => [nextId, ...current.filter((id) => id !== nextId)]);
-    setPendingFocusRowId(nextId);
-    setPendingClientAssignmentRowId(nextId);
+    setBulkFailureNotice(null);
+    setPendingClientAssignmentRowId(null);
+    setSelectedClientIds([]);
     setShowClientModal(true);
   };
 
   const handleDeleteRows = () => {
-    if (selectedRowIds.length === 0) {
+    const idsToDelete = selectedRowIdsRef.current;
+
+    if (idsToDelete.length === 0) {
       return;
     }
 
     setSaveSummary(null);
-    setRows((currentRows) => currentRows.filter((row) => !selectedRowIds.includes(row.id)));
+    setBulkFailureNotice(null);
+    setRows((currentRows) => currentRows.filter((row) => !idsToDelete.includes(row.id)));
     setSelectedRowIds([]);
     setEditingCell(null);
   };
@@ -678,7 +703,8 @@ export function WorkbenchShell() {
     setRows(hydrated);
     setPersistedRows(hydrated);
     setSelectedRowIds([]);
-    setWorkItemPage(1);
+
+    return hydrated;
   };
 
   const fetchClients = async (keyword: string) => {
@@ -697,8 +723,13 @@ export function WorkbenchShell() {
     setSelectedClientIds([]);
   };
 
-  const fetchAuditLogs = async (workItemId: string) => {
-    const response = await fetch(`${apiBaseUrl}/work-items/${workItemId}/audit-logs`);
+  const fetchAuditLogs = async (bizNo: string) => {
+    const params = new URLSearchParams();
+    if (bizNo) {
+      params.set("bizNo", bizNo);
+    }
+
+    const response = await fetch(`${apiBaseUrl}/work-items/audit-logs?${params.toString()}`);
 
     if (!response.ok) {
       setAuditLogs([]);
@@ -713,6 +744,7 @@ export function WorkbenchShell() {
 
   const handleSave = async () => {
     const persistedRowMap = new Map(persistedRows.map((row) => [row.id, row]));
+    setBulkFailureNotice(null);
 
     let added = 0;
     let updated = 0;
@@ -746,23 +778,49 @@ export function WorkbenchShell() {
       return true;
     };
 
-    for (const row of createdRows) {
-      const response = await fetch(`${apiBaseUrl}/work-items`, {
+    if (createdRows.length > 0) {
+      const response = await fetch(`${apiBaseUrl}/work-items/bulk`, {
         method: "POST",
         ...requestInit,
         body: JSON.stringify({
-          id: row.id,
-          revision: row.revision,
-          client: row.client,
-          bizNo: row.bizNo,
-          workType: row.workType,
-          status: row.status,
-          assignee: row.assignee,
-          dueDate: row.dueDate,
-          changedBy: "insu"
+          items: createdRows.map((row) => ({
+            id: row.id,
+            revision: row.revision,
+            client: row.client,
+            bizNo: row.bizNo,
+            workType: row.workType,
+            status: row.status,
+            assignee: row.assignee,
+            dueDate: row.dueDate,
+            changedBy: "insu"
+          }))
         })
       });
-      if (await handleConflict(response)) {
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+        setBulkFailureNotice({
+          successCount: 0,
+          failureCount: createdRows.length,
+          failures: [
+            {
+              index: -1,
+              workItemId: "-",
+              reason: payload?.message ?? "bulk insert 처리 중 오류가 발생했습니다."
+            }
+          ]
+        });
+        return;
+      }
+
+      const bulkResult = (await response.json()) as BulkInsertResult;
+      if (bulkResult.failureCount > 0) {
+        await fetchWorkItems(appliedFilters);
+        setBulkFailureNotice({
+          successCount: bulkResult.successCount,
+          failureCount: bulkResult.failureCount,
+          failures: bulkResult.failures
+        });
         return;
       }
     }
@@ -798,7 +856,17 @@ export function WorkbenchShell() {
       }
     }
 
-    await fetchWorkItems(appliedFilters);
+    const refreshedRows = await fetchWorkItems(appliedFilters);
+    const refreshedActiveBizNo =
+      refreshedRows.find((row) => row.id === activeWorkItemId)?.bizNo ?? refreshedRows[0]?.bizNo;
+
+    if (refreshedActiveBizNo) {
+      await fetchAuditLogs(refreshedActiveBizNo);
+    } else {
+      setAuditLogs([]);
+      setAuditLogPage(1);
+    }
+
     setSaveSummary({ added, updated, deleted: deletedRows.length });
     setToast({ message: "저장되었습니다.", visible: true });
   };
@@ -871,22 +939,37 @@ export function WorkbenchShell() {
     }
 
     if (action === "Export") {
-      const headers = ["업체명", "사업자번호", "업무유형", "상태", "담당자", "마감일", "최근수정"];
-      const csvRows = sortedRows.map((row) =>
-        [row.client, row.bizNo, row.workType, row.status, row.assignee, row.dueDate, row.updatedAt]
-          .map((value) => `"${String(value).replaceAll('"', '""')}"`)
-          .join(",")
-      );
+      void (async () => {
+        const params = new URLSearchParams();
 
-      const csvContent = [headers.join(","), ...csvRows].join("\n");
-      const blob = new Blob([`\uFEFF${csvContent}`], { type: "text/csv;charset=utf-8;" });
-      const downloadUrl = URL.createObjectURL(blob);
-      const link = document.createElement("a");
+        if (appliedFilters.client) {
+          params.set("client", appliedFilters.client);
+        }
+        if (appliedFilters.status) {
+          params.set("status", appliedFilters.status);
+        }
+        if (appliedFilters.assignee) {
+          params.set("assignee", appliedFilters.assignee);
+        }
+        if (appliedFilters.dueDate) {
+          params.set("dueDate", appliedFilters.dueDate);
+        }
 
-      link.href = downloadUrl;
-      link.download = "tax-workbench-export.csv";
-      link.click();
-      URL.revokeObjectURL(downloadUrl);
+        const response = await fetch(`${apiBaseUrl}/work-items/export?${params.toString()}`);
+        if (!response.ok) {
+          window.alert("Export 처리 중 오류가 발생했습니다.");
+          return;
+        }
+
+        const blob = await response.blob();
+        const downloadUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+
+        link.href = downloadUrl;
+        link.download = "tax-workbench-export.csv";
+        link.click();
+        URL.revokeObjectURL(downloadUrl);
+      })();
       return;
     }
   };
@@ -930,28 +1013,33 @@ export function WorkbenchShell() {
   };
 
   const handleClientSelect = () => {
-    const selectedClient = clientRows.find((row) => row.id === selectedClientIds[0]);
+    const selectedClients = clientRows.filter((row) => selectedClientIds.includes(row.id));
 
-    if (!selectedClient) {
+    if (selectedClients.length === 0) {
       setShowClientModal(false);
       return;
     }
 
-    if (pendingClientAssignmentRowId) {
-      setRows((currentRows) =>
-        currentRows.map((row) =>
-          row.id === pendingClientAssignmentRowId
-            ? {
-                ...row,
-                client: selectedClient.name,
-                bizNo: selectedClient.bizNo
-              }
-            : row
-        )
-      );
-      setPendingFocusRowId(pendingClientAssignmentRowId);
-      setPendingClientAssignmentRowId(null);
-    }
+    const createdAt = formatUpdatedAt(new Date().toISOString());
+    const newRows = selectedClients.map((client, index) => ({
+      id: `WI-${Date.now()}-${index}`,
+      revision: 0,
+      client: client.name,
+      bizNo: client.bizNo,
+      workType: "FILING",
+      status: "TODO",
+      assignee: "insu",
+      dueDate: todayDate(),
+      updatedAt: createdAt
+    }));
+
+    setRows((currentRows) => [...newRows, ...currentRows]);
+    setSelectedRowIds(newRows.map((row) => row.id));
+    setPendingFocusRowId(newRows[0]?.id ?? null);
+    setPendingClientAssignmentRowId(null);
+    setSaveSummary(null);
+    setBulkFailureNotice(null);
+    setSelectedClientIds([]);
 
     setShowClientModal(false);
   };
@@ -967,10 +1055,11 @@ export function WorkbenchShell() {
     const isClientColumn = columnKey === "client";
     const cellAlignmentClass = isClientColumn ? "text-left" : "text-center";
     const contentAlignmentClass = isClientColumn ? "" : "justify-center";
+    const whiteSpaceClass = columnKey === "updatedAt" ? "whitespace-nowrap" : "";
 
     if (isEditing) {
       return (
-        <div className={`min-h-10 w-full rounded-lg px-2 py-2 ${cellAlignmentClass}`}>
+      <div className={`w-full rounded-lg px-2 py-1 ${cellAlignmentClass} ${whiteSpaceClass}`}>
           {columnKey === "workType" ? (
             <select
               ref={(element) => {
@@ -984,7 +1073,7 @@ export function WorkbenchShell() {
                   handleCellCommit();
                 }
               }}
-              className={`w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none ${cellAlignmentClass}`}
+              className={`w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none ${cellAlignmentClass} ${whiteSpaceClass}`}
             >
               {workTypeOptions.map((option) => (
                 <option key={option} value={option}>
@@ -1006,7 +1095,7 @@ export function WorkbenchShell() {
                   handleCellCommit();
                 }
               }}
-              className={`w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none ${cellAlignmentClass}`}
+              className={`w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none ${cellAlignmentClass} ${whiteSpaceClass}`}
             />
           ) : (
             <input
@@ -1022,7 +1111,7 @@ export function WorkbenchShell() {
                   handleCellCommit();
                 }
               }}
-              className={`w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none ${cellAlignmentClass}`}
+              className={`w-full rounded-md border border-amber-500 bg-white px-2 py-1.5 outline-none ${cellAlignmentClass} ${whiteSpaceClass}`}
             />
           )}
         </div>
@@ -1032,8 +1121,8 @@ export function WorkbenchShell() {
     return (
       <button
         type="button"
-        onClick={() => handleCellClick(row.id, columnKey)}
-        className={`min-h-10 w-full rounded-lg px-2 py-2 transition ${cellAlignmentClass} ${contentAlignmentClass} ${isReadOnlyColumn ? "cursor-default" : "hover:bg-amber-50"}`}
+        onClick={() => handleCellClick(row, columnKey)}
+        className={`w-full rounded-lg px-2 py-1 transition ${cellAlignmentClass} ${contentAlignmentClass} ${whiteSpaceClass} ${isReadOnlyColumn ? "cursor-default" : "hover:bg-amber-50"}`}
       >
         <span className={`${columnKey === "client" ? "font-medium" : ""} ${isReadOnlyColumn ? "text-amber-700" : ""}`}>
           {row[columnKey] || "-"}
@@ -1048,6 +1137,8 @@ export function WorkbenchShell() {
     const isSelectColumn =
       columnKey === "type" || columnKey === "status" || columnKey === "tier";
     const isNameColumn = columnKey === "name";
+    const isPersistedBizNo =
+      columnKey === "bizNo" && persistedClientRows.some((persistedRow) => persistedRow.id === row.id);
     const cellAlignmentClass = isNameColumn ? "text-left" : "text-center";
     const contentAlignmentClass = isNameColumn ? "" : "justify-center";
     const options =
@@ -1059,7 +1150,7 @@ export function WorkbenchShell() {
 
     if (isEditing) {
       return (
-        <div className={`min-h-10 w-full rounded-lg px-2 py-2 ${cellAlignmentClass}`}>
+      <div className={`w-full rounded-lg px-2 py-1 ${cellAlignmentClass}`}>
           {isSelectColumn ? (
             <select
               ref={(element) => {
@@ -1108,9 +1199,9 @@ export function WorkbenchShell() {
       <button
         type="button"
         onClick={() => handleClientCellClick(row.id, columnKey)}
-        className={`min-h-10 w-full rounded-lg px-2 py-2 transition hover:bg-amber-50 ${cellAlignmentClass} ${contentAlignmentClass}`}
+        className={`w-full rounded-lg px-2 py-1 transition ${isPersistedBizNo ? "cursor-default" : "hover:bg-amber-50"} ${cellAlignmentClass} ${contentAlignmentClass}`}
       >
-        <span className={columnKey === "name" ? "font-medium" : ""}>{row[columnKey] || "-"}</span>
+        <span className={`${columnKey === "name" ? "font-medium" : ""} ${isPersistedBizNo ? "text-amber-700" : ""}`}>{row[columnKey] || "-"}</span>
       </button>
     );
   };
@@ -1124,16 +1215,18 @@ export function WorkbenchShell() {
             <input
               type="checkbox"
               checked={areAllRowsSelected}
+              onClick={(event) => event.stopPropagation()}
               onChange={handleToggleAllRows}
               className="h-4 w-4 rounded border-stone-400 accent-amber-600"
             />
           </label>
         ),
         cell: ({ row }) => (
-          <label className="flex items-center justify-center">
+          <label className="flex items-center justify-center" onClick={(event) => event.stopPropagation()}>
             <input
               type="checkbox"
               checked={selectedRowIds.includes(row.original.id)}
+              onClick={(event) => event.stopPropagation()}
               onChange={() => handleRowSelection(row.original.id)}
               className="h-4 w-4 rounded border-stone-300 accent-amber-600"
             />
@@ -1236,11 +1329,11 @@ export function WorkbenchShell() {
           </button>
         ),
         cell: ({ row }) => (
-          <div className="flex justify-center text-center">
+          <div className="flex justify-center text-center whitespace-nowrap">
             {renderWorkbenchCell(row.original, "updatedAt")}
           </div>
         ),
-        size: 110
+        size: 170
       }
     ],
     [areAllRowsSelected, selectedRowIds, editingCell, sortKey, sortDirection]
@@ -1363,7 +1456,7 @@ export function WorkbenchShell() {
   );
 
   const workItemTable = useReactTable({
-    data: pagedWorkItemRows,
+    data: sortedRows,
     columns: workItemColumns,
     getCoreRowModel: getCoreRowModel()
   });
@@ -1380,11 +1473,11 @@ export function WorkbenchShell() {
         accessorKey: "fieldName",
         header: "변경컬럼",
         cell: ({ row }) => (
-          <span className="block text-center font-medium text-stone-800">
+          <span className="block whitespace-nowrap text-center font-medium text-stone-800">
             {auditFieldLabels[row.original.fieldName] ?? row.original.fieldName ?? "-"}
           </span>
         ),
-        size: 130
+        size: 160
       },
       {
         accessorKey: "beforeValue",
@@ -1422,7 +1515,6 @@ export function WorkbenchShell() {
     getCoreRowModel: getCoreRowModel()
   });
 
-  const workItemTotalPages = Math.max(1, Math.ceil(sortedRows.length / WORK_ITEM_PAGE_SIZE));
   const auditLogTotalPages = Math.max(1, Math.ceil(auditLogs.length / AUDIT_LOG_PAGE_SIZE));
 
   return (
@@ -1519,13 +1611,6 @@ export function WorkbenchShell() {
                   ) : null}
                 </div>
                 <div className="flex items-center gap-2">
-                  {draftFilters.dueDate ? (
-                    <input
-                      value={draftFilters.dueDate}
-                      readOnly
-                      className="w-36 rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700 outline-none"
-                    />
-                  ) : null}
                   <button
                     type="button"
                     onClick={() => setShowDueDateCalendar((current) => !current)}
@@ -1533,6 +1618,26 @@ export function WorkbenchShell() {
                   >
                     마감일
                   </button>
+                  {draftFilters.dueDate ? (
+                    <div className="relative w-36">
+                      <input
+                        value={draftFilters.dueDate}
+                        readOnly
+                        className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 pr-9 text-sm text-stone-700 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDraftFilters((current) => ({ ...current, dueDate: "" }));
+                          setShowDueDateCalendar(false);
+                        }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-sm font-semibold text-stone-400 transition hover:text-rose-600"
+                        aria-label="마감일 초기화"
+                      >
+                        X
+                      </button>
+                    </div>
+                  ) : null}
                   {showDueDateCalendar ? (
                     <div className="rounded-2xl border border-stone-200 bg-white p-3 shadow-lg">
                       <input
@@ -1575,8 +1680,50 @@ export function WorkbenchShell() {
               </div>
             ) : null}
 
+            {bulkFailureNotice ? (
+              <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-900">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="font-semibold">bulk insert 중 일부 실패가 발생했습니다.</p>
+                    <p className="mt-1 text-rose-800">
+                      성공 {bulkFailureNotice.successCount}건, 실패 {bulkFailureNotice.failureCount}건
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBulkFailureNotice(null)}
+                    className="rounded-lg border border-rose-200 bg-white px-3 py-1 text-xs font-semibold text-rose-700 transition hover:border-rose-400"
+                  >
+                    닫기
+                  </button>
+                </div>
+                <div className="mt-3 max-h-40 overflow-auto rounded-xl border border-rose-100 bg-white/80">
+                  <table className="min-w-full table-fixed border-collapse">
+                    <thead className="bg-rose-100/70 text-xs font-semibold text-rose-900">
+                      <tr>
+                        <th className="px-3 py-2 text-center">순번</th>
+                        <th className="px-3 py-2 text-center">WorkItem ID</th>
+                        <th className="px-3 py-2 text-left">실패 사유</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-rose-100 text-xs text-stone-800">
+                      {bulkFailureNotice.failures.map((failure, index) => (
+                        <tr key={`${failure.workItemId}-${failure.index}-${index}`}>
+                          <td className="px-3 py-2 text-center">
+                            {failure.index >= 0 ? failure.index : "-"}
+                          </td>
+                          <td className="px-3 py-2 text-center">{failure.workItemId || "-"}</td>
+                          <td className="px-3 py-2 text-left">{failure.reason}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
             <div className="mt-4 overflow-hidden rounded-2xl border border-stone-200">
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto border-b border-stone-200">
                 <table className="min-w-full table-fixed border-collapse">
                   <thead className="bg-stone-900 text-xs font-semibold tracking-[0.08em] text-stone-50">
                     {workItemTable.getHeaderGroups().map((headerGroup) => (
@@ -1589,6 +1736,10 @@ export function WorkbenchShell() {
                       </tr>
                     ))}
                   </thead>
+                </table>
+              </div>
+              <div className="max-h-[520px] overflow-y-auto overflow-x-auto">
+                <table className="min-w-full table-fixed border-collapse">
                   <tbody className="divide-y divide-stone-200 text-sm text-stone-900">
                     {workItemTable.getRowModel().rows.map((row, index) => (
                       <tr
@@ -1597,11 +1748,11 @@ export function WorkbenchShell() {
                           workItemRowRefs.current[row.original.id] = element;
                         }}
                         tabIndex={0}
-                        onClick={() => setActiveWorkItemId(row.original.id)}
+                        onClick={() => handleActivateWorkItem(row.original)}
                         className={`cursor-pointer outline-none ${activeWorkItemId === row.original.id ? "bg-amber-50 ring-1 ring-inset ring-amber-300" : index % 2 === 1 ? "bg-stone-50" : "bg-white"} focus-visible:ring-2 focus-visible:ring-amber-400`}
                       >
                         {row.getVisibleCells().map((cell) => (
-                          <td key={cell.id} className="px-4 py-2 align-middle" style={{ width: cell.column.getSize() }}>
+                          <td key={cell.id} className="px-4 py-1 align-middle" style={{ width: cell.column.getSize() }}>
                             {flexRender(cell.column.columnDef.cell, cell.getContext())}
                           </td>
                         ))}
@@ -1609,31 +1760,6 @@ export function WorkbenchShell() {
                     ))}
                   </tbody>
                 </table>
-              </div>
-              <div className="flex items-center justify-between border-t border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-600">
-                <span>
-                  페이지 {workItemPage} / {workItemTotalPages}
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setWorkItemPage((current) => Math.max(1, current - 1))}
-                    disabled={workItemPage === 1}
-                    className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    이전
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setWorkItemPage((current) => Math.min(workItemTotalPages, current + 1))
-                    }
-                    disabled={workItemPage === workItemTotalPages}
-                    className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    다음
-                  </button>
-                </div>
               </div>
             </div>
           </div>
@@ -1644,11 +1770,11 @@ export function WorkbenchShell() {
               </p>
               <h2 className="mt-2 text-2xl font-semibold text-stone-900">변경로그</h2>
               <p className="mt-1 text-sm text-stone-600">
-                선택한 행의 변경 컬럼, 이전값, 이후값을 표시합니다.
+                선택한 행의 사업자번호 기준으로 변경 컬럼, 이전값, 이후값을 표시합니다.
               </p>
               {activeWorkItemId ? (
                 <p className="mt-2 text-xs font-medium text-stone-500">
-                  선택된 WorkItem ID: {activeWorkItemId}
+                  선택된 법인등록번호: {activeBizNo ?? "-"}
                 </p>
               ) : null}
             </div>
@@ -1670,11 +1796,15 @@ export function WorkbenchShell() {
                             </tr>
                           ))}
                         </thead>
+                      </table>
+                    </div>
+                    <div className="max-h-[520px] overflow-y-auto overflow-x-auto">
+                      <table className="min-w-full table-fixed border-collapse">
                         <tbody className="divide-y divide-stone-200 text-sm text-stone-900">
                           {auditLogTable.getRowModel().rows.map((row, index) => (
                             <tr key={row.id} className={index % 2 === 1 ? "bg-stone-50" : "bg-white"}>
                               {row.getVisibleCells().map((cell) => (
-                                <td key={cell.id} className="px-4 py-3 align-top" style={{ width: cell.column.getSize() }}>
+                                <td key={cell.id} className="px-4 py-1 align-top" style={{ width: cell.column.getSize() }}>
                                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                                 </td>
                               ))}
@@ -1795,7 +1925,7 @@ export function WorkbenchShell() {
                       {clientTable.getRowModel().rows.map((row, index) => (
                         <tr key={row.id} className={index % 2 === 1 ? "bg-stone-50" : "bg-white"}>
                           {row.getVisibleCells().map((cell) => (
-                            <td key={cell.id} className="px-4 py-2 align-middle" style={{ width: cell.column.getSize() }}>
+                            <td key={cell.id} className="px-4 py-1 align-middle" style={{ width: cell.column.getSize() }}>
                               {flexRender(cell.column.columnDef.cell, cell.getContext())}
                             </td>
                           ))}

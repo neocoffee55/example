@@ -6,6 +6,8 @@
 
 - 로컬 개발용 API
 - WorkItem 생성/수정/삭제/조회
+- WorkItem bulk insert
+- WorkItem CSV streaming export
 - WorkItem 변경로그 조회
 - Client 조회 및 저장
 - optimistic locking 충돌 응답
@@ -107,7 +109,79 @@ GET /api/work-items?client=Han&status=TODO&dueDate=2026-03-20
 
 - 신규 WorkItem 생성 시에는 현재 audit log가 기록되지 않습니다.
 
-### 1.3 WorkItem 수정
+### 1.3 WorkItem Bulk Insert
+
+`POST /api/work-items/bulk`
+
+요청 본문:
+
+```json
+{
+  "items": [
+    {
+      "id": "WI-1710000000001",
+      "revision": 0,
+      "client": "Han River Holdings",
+      "bizNo": "123-45-67890",
+      "workType": "FILING",
+      "status": "TODO",
+      "assignee": "insu",
+      "dueDate": "2026-03-20",
+      "changedBy": "insu"
+    },
+    {
+      "id": "WI-1710000000002",
+      "revision": 0,
+      "client": "Mirae Clinic",
+      "bizNo": "220-11-90876",
+      "workType": "REVIEW",
+      "status": "TODO",
+      "assignee": "insu",
+      "dueDate": "2026-03-21",
+      "changedBy": "insu"
+    }
+  ]
+}
+```
+
+응답 `200 OK`:
+
+```json
+{
+  "totalCount": 2,
+  "successCount": 2,
+  "failureCount": 0,
+  "failures": []
+}
+```
+
+부분 실패 응답 예시:
+
+```json
+{
+  "totalCount": 3,
+  "successCount": 2,
+  "failureCount": 1,
+  "failures": [
+    {
+      "index": 1,
+      "workItemId": "WI-10031",
+      "reason": "이미 존재하는 WorkItem id입니다."
+    }
+  ]
+}
+```
+
+참고:
+
+- 요청은 chunk 단위로 나누어 저장합니다.
+- chunk 저장 실패 시 개별 row 저장으로 fallback 하여 부분 성공/실패를 구분합니다.
+- 설정값:
+  - `tax-workbench.bulk-insert.chunk-size`
+  - `tax-workbench.bulk-insert.max-request-size`
+- 신규 bulk insert도 현재 audit log는 남기지 않습니다.
+
+### 1.4 WorkItem 수정
 
 `PATCH /api/work-items/{id}`
 
@@ -152,7 +226,7 @@ Path Parameter:
 - `revision`을 기준으로 optimistic locking을 수행합니다.
 - 수정 성공 시 변경된 필드에 대해 audit log가 기록됩니다.
 
-### 1.4 WorkItem 삭제
+### 1.5 WorkItem 삭제
 
 `DELETE /api/work-items/{id}?revision=...&changedBy=...`
 
@@ -181,7 +255,7 @@ DELETE /api/work-items/WI-10031?revision=2&changedBy=insu
 - 삭제도 optimistic locking revision 검사를 수행합니다.
 - 삭제 시에는 `beforeValue`만 채우고 `afterValue`는 빈 값으로 audit log를 기록합니다.
 
-### 1.5 WorkItem 변경로그 조회
+### 1.6 WorkItem 변경로그 조회
 
 `GET /api/work-items/{id}/audit-logs`
 
@@ -218,6 +292,42 @@ Path Parameter:
 
 - `changedAt DESC` 기준 최신순으로 반환됩니다.
 - `fieldName`은 백엔드 필드 키 그대로 내려가고, 프론트에서 한글 헤더명으로 매핑합니다.
+
+### 1.7 WorkItem CSV Export
+
+`GET /api/work-items/export`
+
+Query Parameter:
+
+- `client`: 업체명 부분일치
+- `status`: 상태 정확일치
+- `assignee`: 담당자 부분일치
+- `dueDate`: `YYYY-MM-DD` 정확일치
+
+예시:
+
+```http
+GET /api/work-items/export?client=Han&status=TODO
+```
+
+응답:
+
+- `200 OK`
+- Content-Type: `text/csv;charset=UTF-8`
+- Content-Disposition: `attachment; filename="tax-workbench-export.csv"`
+
+CSV 헤더:
+
+```text
+업체명,사업자번호,업무유형,상태,담당자,마감일,최근수정
+```
+
+참고:
+
+- 현재 필터 조건과 동일한 조건으로 CSV를 내려줍니다.
+- 응답은 `StreamingResponseBody` 기반으로 바로 쓰기/flush 하는 구조입니다.
+- UTF-8 BOM을 포함해서 엑셀에서 한글이 깨지지 않도록 처리합니다.
+- 현재 조회 자체는 repository 전체 조회 후 서비스 레이어에서 필터링/정렬합니다.
 
 ## 2. Client API
 
@@ -388,7 +498,7 @@ WorkItem 수정 또는 삭제 시 오래된 `revision`으로 요청하면 백엔
 - Client 저장은 아직 row 단위 API가 아닙니다.
 - 정식 OpenAPI 문서는 아직 없습니다.
 - 입력 검증은 현재 UI 동작에 맞춘 수준으로 가볍습니다.
-- CSV Export는 아직 백엔드 streaming이 아니라 프론트에서 현재 보이는 데이터를 기준으로 생성합니다.
+- CSV Export는 streaming 응답이지만, 대용량 최적화를 위한 DB cursor/fetch 기반 구현은 아직 아닙니다.
 
 ## 6. 문서 기준 소스
 

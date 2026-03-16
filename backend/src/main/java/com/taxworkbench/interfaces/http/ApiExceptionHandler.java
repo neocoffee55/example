@@ -22,4 +22,12 @@ class ApiExceptionHandler {
                 "message", exception.getMessage()
         );
     }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    Map<String, Object> handleBadRequest(IllegalArgumentException exception) {
+        return Map.of(
+                "message", exception.getMessage()
+        );
+    }
 }

@@ -87,6 +87,7 @@ curl "http://localhost:8081/api/work-items/WI-10031/audit-logs"
 
 - `GET /api/work-items`
 - `POST /api/work-items`
+- `POST /api/work-items/bulk`
 - `PATCH /api/work-items/{id}`
 - `DELETE /api/work-items/{id}?revision=...&changedBy=...`
 - `GET /api/work-items/{id}/audit-logs`

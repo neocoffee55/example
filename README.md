@@ -58,7 +58,8 @@ Tax Workbench는 세무 신고 시즌의 대량 업무를 빠르게 처리하기
 
 - 메인 그리드에서 업무유형, 마감일 등 수정
 - `save` 클릭
-- 백엔드에 row 단위로 저장
+- 신규 행은 bulk insert로 저장
+- 수정/삭제는 row 단위로 저장
 - 저장 완료 후 하단 가운데 토스트 표시
 - 저장 후 데이터 재조회
 
@@ -129,7 +130,7 @@ TanStack Table을 사용한 이유는 셀, 헤더, 정렬, 페이징, 편집 흐
 - 로컬에서 바로 실행 가능한 전체 흐름
 - DB 기반 저장과 변경로그 조회
 - 인라인 편집 중심의 빠른 사용자 경험
-- row 단위 저장 구조
+- 신규 bulk insert + 수정/삭제 row 단위 저장 구조
 - 충돌 감지 가능
 
 ### 한계
@@ -137,7 +138,7 @@ TanStack Table을 사용한 이유는 셀, 헤더, 정렬, 페이징, 편집 흐
 - WorkItem 조회가 아직 DB 주도 페이징이 아님
 - Client 저장은 아직 sync 방식
 - 프론트 메인 화면이 큰 단일 파일에 집중됨
-- Bulk Insert와 백엔드 streaming export는 아직 구현 전 단계
+- Export는 스트리밍 응답이지만, 조회 필터링은 아직 메모리 기반임
 
 즉, 현재 버전은 "운영 구조의 핵심을 보여주는 프로토타입"이며, 대규모 운영 대응은 다음 단계에서 확장해야 합니다.
 
@@ -147,8 +148,8 @@ TanStack Table을 사용한 이유는 셀, 헤더, 정렬, 페이징, 편집 흐
 
 - DB: H2에서 PostgreSQL 같은 관리형 RDBMS로 전환
 - API: 목록 조회를 DB projection + 정렬 + 페이징 구조로 전환
-- Export: 브라우저 CSV가 아니라 비동기 Export Job + Object Storage 다운로드 링크로 전환
-- Bulk Insert: 동기 저장이 아니라 queue 기반 chunk 처리로 전환
+- Export: 현재 streaming CSV에서 비동기 Export Job + Object Storage 다운로드 링크로 전환
+- Bulk Insert: 현재 동기 chunk 처리에서 queue 기반 비동기 처리로 전환
 - Audit: append-only 유지, 필요 시 비동기 저장 경로 검토
 - 인프라: Container Apps, Service Bus, Functions, Blob Storage 같은 PaaS 조합으로 확장
 

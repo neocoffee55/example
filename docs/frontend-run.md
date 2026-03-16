@@ -90,7 +90,8 @@ npm run preview
 
 ### Export
 
-- 현재 화면에 보이는 WorkItem 데이터를 CSV로 Export 가능
+- 현재 적용된 조회 조건을 기준으로 백엔드 CSV streaming export를 실행합니다.
+- 프론트는 `/api/work-items/export`를 호출하고, 백엔드가 내려준 CSV 파일을 다운로드합니다.
 
 ## 검증 방법
 
