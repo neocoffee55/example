@@ -109,7 +109,7 @@ curl "http://localhost:8081/api/work-items/WI-10031/audit-logs"
 
 ### 프론트에서 백엔드 호출이 안 되는 경우
 
-프론트 개발 서버는 `http://localhost:8080`에서 실행되지만, `/api` 요청은 `http://localhost:8081`로 프록시됩니다.
+프론트 개발 서버는 `http://localhost:8082`에서 실행되지만, `/api` 요청은 `http://localhost:8081`로 프록시됩니다.
 
 프론트에서 `ERR_CONNECTION_REFUSED`가 보이면 먼저 백엔드가 `8081`에서 정상 실행 중인지 확인해야 합니다.
 

@@ -41,6 +41,7 @@ class WorkItemQueryIntegrationTests {
         assertThat(csv).contains("업체명,사업자번호,업무유형,상태,담당자,마감일,최근수정");
         assertThat(csv).contains("\"Han River Holdings\",\"123-45-67890\",\"FILING\",\"IN_PROGRESS\",\"insu\",\"2026-03-20\"");
         assertThat(csv).contains("\"Mirae Clinic\",\"220-11-90876\",\"REVIEW\",\"HOLD\",\"jane\",\"2026-03-18\"");
+        assertThat(csv).containsPattern("\"2026-\\d{2}-\\d{2} \\d{2}:\\d{2}\"");
         assertThat(csv.indexOf("Han River Holdings")).isLessThan(csv.indexOf("Mirae Clinic"));
     }
 

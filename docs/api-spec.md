@@ -15,7 +15,7 @@
 기본 실행 기준:
 
 - Backend Base URL: `http://localhost:8081`
-- Frontend Dev Server: `http://localhost:8080`
+- Frontend Dev Server: `http://localhost:8082`
 - 프론트는 `/api/...`로 호출하고 Vite가 백엔드로 프록시합니다.
 
 ## 공통 규칙
@@ -25,7 +25,7 @@
   - `dueDate`: `YYYY-MM-DD`
   - `updatedAt`, `changedAt`: 백엔드 ISO timestamp 문자열
 - CORS
-  - 현재 백엔드는 `http://localhost:8080`을 허용합니다.
+  - 현재 백엔드는 `http://localhost:8082`을 허용합니다.
 
 ## 1. WorkItem API
 

@@ -8,12 +8,16 @@ import com.taxworkbench.application.WorkbenchDataService.BulkInsertRequest;
 import com.taxworkbench.application.WorkbenchDataService.BulkInsertFailure;
 import com.taxworkbench.application.WorkbenchDataService.BulkInsertResult;
 import com.taxworkbench.application.WorkbenchDataService.WorkItemPayload;
+import com.taxworkbench.infrastructure.persistence.ClientEntity;
+import com.taxworkbench.infrastructure.persistence.ClientJpaRepository;
 import com.taxworkbench.infrastructure.persistence.WorkItemJpaRepository;
+import java.time.Instant;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.DirtiesContext;
 
 @SpringBootTest(properties = {
         "tax-workbench.bulk-insert.max-request-size=10000",
@@ -26,6 +30,9 @@ class WorkItemBulkInsertIntegrationTests {
 
     @Autowired
     private WorkItemJpaRepository workItemRepository;
+
+    @Autowired
+    private ClientJpaRepository clientRepository;
 
     @Test
     void bulkInsertStoresMultipleRowsWhenAllItemsAreValid() throws Exception {
@@ -100,5 +107,44 @@ class WorkItemBulkInsertIntegrationTests {
         assertThat(workItemRepository.count()).isEqualTo(beforeCount + 10_000);
         assertThat(workItemRepository.findById("WI-BULK-10K-00000")).isPresent();
         assertThat(workItemRepository.findById("WI-BULK-10K-09999")).isPresent();
+    }
+
+    @Test
+    @DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)
+    void bulkInsertActivatesMatchingClientStatuses() {
+        ClientEntity firstClient = clientRepository.findById("CL-1001").orElseThrow();
+        ClientEntity secondClient = clientRepository.findById("CL-1002").orElseThrow();
+
+        clientRepository.saveAll(List.of(
+                new ClientEntity(
+                        firstClient.getId(),
+                        firstClient.getName(),
+                        firstClient.getBizNo(),
+                        firstClient.getType(),
+                        "INACTIVE",
+                        firstClient.getTier(),
+                        Instant.now()
+                ),
+                new ClientEntity(
+                        secondClient.getId(),
+                        secondClient.getName(),
+                        secondClient.getBizNo(),
+                        secondClient.getType(),
+                        "INACTIVE",
+                        secondClient.getTier(),
+                        Instant.now()
+                )
+        ));
+
+        BulkInsertResult result = workbenchDataService.bulkInsertWorkItems(
+                new BulkInsertRequest(List.of(
+                        new WorkItemPayload("WI-BULK-ACTIVE-1001", 0, "Han River Holdings", "123-45-67890", "FILING", "TODO", "insu", "2026-03-25", "insu"),
+                        new WorkItemPayload("WI-BULK-ACTIVE-1002", 0, "Mirae Clinic", "220-11-90876", "REVIEW", "TODO", "insu", "2026-03-26", "insu")
+                ))
+        );
+
+        assertThat(result.successCount()).isEqualTo(2);
+        assertThat(clientRepository.findById("CL-1001").orElseThrow().getStatus()).isEqualTo("ACTIVE");
+        assertThat(clientRepository.findById("CL-1002").orElseThrow().getStatus()).isEqualTo("ACTIVE");
     }
 }

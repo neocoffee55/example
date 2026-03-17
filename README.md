@@ -182,7 +182,7 @@ npm install
 npm run dev
 ```
 
-- `http://localhost:8080`
+- `http://localhost:8082`
 
 ## 11. AI 협업 관점에서의 회고
 

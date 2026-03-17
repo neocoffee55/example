@@ -11,6 +11,8 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -32,6 +34,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class WorkbenchDataService {
 
     private static final String DEFAULT_CHANGED_BY = "insu";
+    private static final DateTimeFormatter GRID_DATE_TIME_FORMATTER =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     private final WorkItemJpaRepository workItemRepository;
     private final WorkItemAuditLogJpaRepository auditLogRepository;
@@ -150,6 +154,7 @@ public class WorkbenchDataService {
                 0L
         );
         WorkItemEntity saved = workItemRepository.save(entity);
+        syncClientStatusByBizNo(saved.getBizNo(), "ACTIVE");
         return toWorkItemView(saved);
     }
 
@@ -231,6 +236,7 @@ public class WorkbenchDataService {
             throw buildConflictException(entity, payload);
         }
 
+        String previousBizNo = entity.getBizNo();
         Map<String, Object> before = snapshot(entity);
         entity.update(
                 payload.client(),
@@ -242,6 +248,8 @@ public class WorkbenchDataService {
                 Instant.now()
         );
         WorkItemEntity saved = workItemRepository.saveAndFlush(entity);
+        syncClientStatusByBizNo(saved.getBizNo(), "ACTIVE");
+        syncClientStatusToInactiveWhenNoWorkItemsRemain(previousBizNo);
         recordAuditLogs(saved.getId(), saved.getRevision(), before, payload.toAuditMap(), payload.changedBy());
         return toWorkItemView(saved);
     }
@@ -266,6 +274,7 @@ public class WorkbenchDataService {
         }
 
         workItemRepository.delete(entity);
+        syncClientStatusToInactiveWhenNoWorkItemsRemain(entity.getBizNo());
         recordAuditLogs(entity.getId(), entity.getRevision(), snapshot(entity), Map.of(), changedBy);
     }
 
@@ -333,21 +342,81 @@ public class WorkbenchDataService {
     }
 
     @Transactional
-    public List<ClientView> saveClients(List<ClientPayload> payloads) {
-        clientRepository.deleteAllInBatch();
+    public List<ClientView> saveClients(ClientSaveRequest request) {
+        List<ClientPayload> payloads = request.items() == null ? List.of() : request.items();
+        List<String> deletedIds = request.deletedIds() == null ? List.of() : request.deletedIds();
+        Set<String> deletedIdSet = new HashSet<>(deletedIds);
+
+        validateClientBizNoUniqueness(payloads, deletedIdSet);
+        Map<String, ClientEntity> existingClientsById = clientRepository.findAll().stream()
+                .collect(
+                        LinkedHashMap::new,
+                        (map, client) -> map.put(client.getId(), client),
+                        LinkedHashMap::putAll
+                );
+        if (!deletedIdSet.isEmpty()) {
+            clientRepository.deleteAllByIdInBatch(deletedIdSet);
+        }
         List<ClientEntity> entities = payloads.stream()
-                .map(payload -> new ClientEntity(
-                        payload.id(),
-                        payload.name(),
-                        payload.bizNo(),
-                        payload.type(),
-                        payload.status(),
-                        payload.tier(),
-                        Instant.now()
-                ))
+                .map(payload -> {
+                    ClientEntity existingClient = existingClientsById.get(payload.id());
+                    Instant updatedAt = existingClient == null || hasClientChanged(existingClient, payload)
+                            ? Instant.now()
+                            : existingClient.getUpdatedAt();
+
+                    return new ClientEntity(
+                            payload.id(),
+                            payload.name(),
+                            payload.bizNo(),
+                            payload.type(),
+                            payload.status(),
+                            payload.tier(),
+                            updatedAt
+                    );
+                })
                 .toList();
         clientRepository.saveAll(entities);
         return findClients("");
+    }
+
+    private void validateClientBizNoUniqueness(List<ClientPayload> payloads, Set<String> deletedIds) {
+        Set<String> seenBizNos = new HashSet<>();
+        Map<String, String> existingBizNoOwnerIds = clientRepository.findAll().stream()
+                .filter(client -> !deletedIds.contains(client.getId()))
+                .filter(client -> client.getBizNo() != null && !client.getBizNo().isBlank())
+                .collect(
+                        LinkedHashMap::new,
+                        (map, client) -> map.put(normalizeBizNo(client.getBizNo()), client.getId()),
+                        LinkedHashMap::putAll
+                );
+
+        for (ClientPayload payload : payloads) {
+            String normalizedBizNo = normalizeBizNo(payload.bizNo());
+            if (normalizedBizNo.isBlank()) {
+                continue;
+            }
+
+            if (!seenBizNos.add(normalizedBizNo)) {
+                throw new IllegalArgumentException("동일한 사업자번호가 존재합니다.");
+            }
+
+            String existingOwnerId = existingBizNoOwnerIds.get(normalizedBizNo);
+            if (existingOwnerId != null && !existingOwnerId.equals(payload.id())) {
+                throw new IllegalArgumentException("동일한 사업자번호가 존재합니다.");
+            }
+        }
+    }
+
+    private boolean hasClientChanged(ClientEntity entity, ClientPayload payload) {
+        return !String.valueOf(entity.getName()).equals(String.valueOf(payload.name()))
+                || !String.valueOf(entity.getBizNo()).equals(String.valueOf(payload.bizNo()))
+                || !String.valueOf(entity.getType()).equals(String.valueOf(payload.type()))
+                || !String.valueOf(entity.getStatus()).equals(String.valueOf(payload.status()))
+                || !String.valueOf(entity.getTier()).equals(String.valueOf(payload.tier()));
+    }
+
+    private String normalizeBizNo(String value) {
+        return normalizeFilter(value).replaceAll("\\D", "");
     }
 
     private WorkItemConflictException buildConflictException(WorkItemEntity entity, WorkItemPayload payload) {
@@ -425,17 +494,22 @@ public class WorkbenchDataService {
 
     private int persistBulkChunk(List<BulkInsertCandidate> candidates, List<BulkInsertFailure> failures) {
         try {
-            requiresNewTransactionTemplate.executeWithoutResult(status ->
-                    workItemRepository.saveAllAndFlush(candidates.stream().map(BulkInsertCandidate::entity).toList())
-            );
+            requiresNewTransactionTemplate.executeWithoutResult(status -> {
+                List<WorkItemEntity> savedEntities =
+                        workItemRepository.saveAllAndFlush(candidates.stream().map(BulkInsertCandidate::entity).toList());
+                syncClientStatusToActive(savedEntities.stream()
+                        .map(WorkItemEntity::getBizNo)
+                        .toList());
+            });
             return candidates.size();
         } catch (RuntimeException chunkException) {
             int successCount = 0;
             for (BulkInsertCandidate candidate : candidates) {
                 try {
-                    requiresNewTransactionTemplate.executeWithoutResult(status ->
-                            workItemRepository.saveAndFlush(candidate.entity())
-                    );
+                    requiresNewTransactionTemplate.executeWithoutResult(status -> {
+                        WorkItemEntity savedEntity = workItemRepository.saveAndFlush(candidate.entity());
+                        syncClientStatusByBizNo(savedEntity.getBizNo(), "ACTIVE");
+                    });
                     successCount += 1;
                 } catch (RuntimeException rowException) {
                     failures.add(new BulkInsertFailure(
@@ -455,6 +529,54 @@ public class WorkbenchDataService {
             return "저장 중 알 수 없는 오류가 발생했습니다.";
         }
         return message;
+    }
+
+    private void syncClientStatusToActive(List<String> bizNos) {
+        bizNos.forEach(bizNo -> syncClientStatusByBizNo(bizNo, "ACTIVE"));
+    }
+
+    private void syncClientStatusToInactiveWhenNoWorkItemsRemain(String bizNo) {
+        String normalizedBizNo = normalizeBizNo(bizNo);
+        if (normalizedBizNo.isBlank()) {
+            return;
+        }
+
+        boolean hasRemainingWorkItems = workItemRepository.findAll().stream()
+                .anyMatch(workItem -> normalizedBizNo.equals(normalizeBizNo(workItem.getBizNo())));
+
+        if (hasRemainingWorkItems) {
+            return;
+        }
+
+        syncClientStatusByBizNo(bizNo, "INACTIVE");
+    }
+
+    private void syncClientStatusByBizNo(String bizNo, String nextStatus) {
+        String normalizedBizNo = normalizeBizNo(bizNo);
+        if (normalizedBizNo.isBlank() || nextStatus == null || nextStatus.isBlank()) {
+            return;
+        }
+
+        Instant updatedAt = Instant.now();
+        List<ClientEntity> updatedClients = clientRepository.findAll().stream()
+                .filter(client -> normalizedBizNo.equals(normalizeBizNo(client.getBizNo())))
+                .filter(client -> !nextStatus.equals(client.getStatus()))
+                .map(client -> new ClientEntity(
+                        client.getId(),
+                        client.getName(),
+                        client.getBizNo(),
+                        client.getType(),
+                        nextStatus,
+                        client.getTier(),
+                        updatedAt
+                ))
+                .toList();
+
+        if (updatedClients.isEmpty()) {
+            return;
+        }
+
+        clientRepository.saveAll(updatedClients);
     }
 
     private void recordAuditLogs(
@@ -535,7 +657,11 @@ public class WorkbenchDataService {
     }
 
     private String formatInstant(Instant value) {
-        return value == null ? "" : value.toString();
+        if (value == null) {
+            return "";
+        }
+
+        return GRID_DATE_TIME_FORMATTER.format(value.atZone(ZoneId.systemDefault()));
     }
 
     public record WorkItemView(
@@ -629,6 +755,12 @@ public class WorkbenchDataService {
             String type,
             String status,
             String tier
+    ) {
+    }
+
+    public record ClientSaveRequest(
+            List<ClientPayload> items,
+            List<String> deletedIds
     ) {
     }
 }

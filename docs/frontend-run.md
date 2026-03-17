@@ -44,7 +44,7 @@ npm run dev
 
 현재 런타임 기본값:
 
-- Frontend URL: `http://localhost:8080`
+- Frontend URL: `http://localhost:8082`
 - `/api` 프록시 대상: `http://localhost:8081`
 
 주요 개발 서버 설정 파일:
@@ -97,7 +97,7 @@ npm run preview
 
 프론트와 백엔드를 모두 실행한 뒤 다음을 확인합니다.
 
-1. `http://localhost:8080` 접속
+1. `http://localhost:8082` 접속
 2. WorkItem 데이터가 표시되는지 확인
 3. 행을 클릭했을 때 오른쪽 변경로그 그리드가 바뀌는지 확인
 4. `법인정보` 팝업을 열고 데이터가 로드되는지 확인
@@ -113,7 +113,7 @@ npm run preview
 
 - 백엔드가 실행 중인지
 - 백엔드가 `8081` 포트에서 listening 중인지
-- Vite 개발 서버가 `8080` 포트에서 실행 중인지
+- Vite 개발 서버가 `8082` 포트에서 실행 중인지
 
 ### Node 버전 경고
 

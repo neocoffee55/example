@@ -1,1 +1,5 @@
+com/taxworkbench/WorkItemClientStatusIntegrationTests.class
+com/taxworkbench/WorkItemBulkInsertIntegrationTests.class
+com/taxworkbench/ClientSaveIntegrationTests.class
+com/taxworkbench/WorkItemQueryIntegrationTests.class
 com/taxworkbench/TaxWorkbenchApplicationTests.class
