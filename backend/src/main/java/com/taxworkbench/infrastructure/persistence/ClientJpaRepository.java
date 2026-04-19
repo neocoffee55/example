@@ -1,9 +1,11 @@
 package com.taxworkbench.infrastructure.persistence;
 
-import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
-public interface ClientJpaRepository extends JpaRepository<ClientEntity, String> {
+import java.util.Optional;
 
-    List<ClientEntity> findByNameContainingIgnoreCaseOrBizNoContainingIgnoreCase(String name, String bizNo);
+public interface ClientJpaRepository extends JpaRepository<ClientEntity, Long>, JpaSpecificationExecutor<ClientEntity> {
+
+    Optional<ClientEntity> findByBizNo(String bizNo);
 }

@@ -1,71 +1,100 @@
 package com.taxworkbench.infrastructure.persistence;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import com.taxworkbench.domain.shared.ClientStatus;
+import com.taxworkbench.domain.shared.ClientTier;
+import com.taxworkbench.domain.shared.ClientType;
+import jakarta.persistence.*;
+
 import java.time.Instant;
 
 @Entity
-@Table(name = "client")
+@Table(name = "clients")
 public class ClientEntity {
 
     @Id
-    private String id;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
     @Column(nullable = false)
     private String name;
 
-    @Column(name = "biz_no", nullable = false)
+    @Column(nullable = false, unique = true)
     private String bizNo;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String type;
+    private ClientType type;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private ClientStatus status;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private ClientTier tier;
+
+    @Version
+    private long version;
 
     @Column(nullable = false)
-    private String status;
-
-    @Column(nullable = false)
-    private String tier;
-
-    @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    protected ClientEntity() {
+    @PrePersist
+    @PreUpdate
+    void touch() {
+        updatedAt = Instant.now();
     }
 
-    public ClientEntity(String id, String name, String bizNo, String type, String status, String tier, Instant updatedAt) {
-        this.id = id;
-        this.name = name;
-        this.bizNo = bizNo;
-        this.type = type;
-        this.status = status;
-        this.tier = tier;
-        this.updatedAt = updatedAt;
-    }
-
-    public String getId() {
+    public Long getId() {
         return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
     }
 
     public String getName() {
         return name;
     }
 
+    public void setName(String name) {
+        this.name = name;
+    }
+
     public String getBizNo() {
         return bizNo;
     }
 
-    public String getType() {
+    public void setBizNo(String bizNo) {
+        this.bizNo = bizNo;
+    }
+
+    public ClientType getType() {
         return type;
     }
 
-    public String getStatus() {
+    public void setType(ClientType type) {
+        this.type = type;
+    }
+
+    public ClientStatus getStatus() {
         return status;
     }
 
-    public String getTier() {
+    public void setStatus(ClientStatus status) {
+        this.status = status;
+    }
+
+    public ClientTier getTier() {
         return tier;
+    }
+
+    public void setTier(ClientTier tier) {
+        this.tier = tier;
+    }
+
+    public long getVersion() {
+        return version;
     }
 
     public Instant getUpdatedAt() {

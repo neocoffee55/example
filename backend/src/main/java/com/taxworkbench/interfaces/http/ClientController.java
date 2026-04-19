@@ -1,74 +1,76 @@
 package com.taxworkbench.interfaces.http;
 
-import com.taxworkbench.application.WorkbenchDataService;
-import com.taxworkbench.application.WorkbenchDataService.ClientPayload;
-import com.taxworkbench.application.WorkbenchDataService.ClientSaveRequest;
-import com.taxworkbench.application.WorkbenchDataService.ClientView;
-import java.util.List;
-import java.util.Map;
-import org.springframework.web.bind.annotation.CrossOrigin;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import com.taxworkbench.application.client.*;
+import com.taxworkbench.application.shared.CursorPage;
+import com.taxworkbench.domain.shared.ClientStatus;
+import com.taxworkbench.domain.shared.ClientTier;
+import com.taxworkbench.domain.shared.ClientType;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
-@CrossOrigin(origins = "http://localhost:8082")
 @RequestMapping("/api/clients")
-class ClientController {
+public class ClientController {
 
-    private final WorkbenchDataService service;
+    private final ClientQueryUseCase clientQueryUseCase;
+    private final ClientCommandUseCase clientCommandUseCase;
 
-    ClientController(WorkbenchDataService service) {
-        this.service = service;
+    public ClientController(
+            ClientQueryUseCase clientQueryUseCase,
+            ClientCommandUseCase clientCommandUseCase
+    ) {
+        this.clientQueryUseCase = clientQueryUseCase;
+        this.clientCommandUseCase = clientCommandUseCase;
     }
 
     @GetMapping
-    List<ClientView> find(@RequestParam(defaultValue = "") String keyword) {
-        return service.findClients(keyword);
+    CursorPage<ClientView> list(
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false) ClientStatus status,
+            @RequestParam(required = false) ClientType type,
+            @RequestParam(required = false) ClientTier tier,
+            @RequestParam(defaultValue = "50") @Min(1) @Max(200) int pageSize,
+            @RequestParam(required = false) String cursor
+    ) {
+        return clientQueryUseCase.listClients(new ClientListQuery(name, status, type, tier, pageSize, cursor));
     }
 
-    @PutMapping
-    List<ClientView> save(@RequestBody Object requestBody) {
-        return service.saveClients(toClientSaveRequest(requestBody));
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    ClientView create(@Valid @RequestBody CreateClientRequest request) {
+        return clientCommandUseCase.createClient(new CreateClientCommand(
+                request.name(),
+                request.bizNo(),
+                request.type(),
+                request.status(),
+                request.tier()
+        ));
     }
 
-    @SuppressWarnings("unchecked")
-    private ClientSaveRequest toClientSaveRequest(Object requestBody) {
-        if (requestBody instanceof List<?>) {
-            return new ClientSaveRequest(toClientPayloads((List<?>) requestBody), List.of());
-        }
-
-        if (requestBody instanceof Map<?, ?>) {
-            Map<String, Object> requestMap = (Map<String, Object>) requestBody;
-            List<ClientPayload> items = toClientPayloads((List<?>) requestMap.getOrDefault("items", List.of()));
-            List<String> deletedIds = (List<String>) requestMap.getOrDefault("deletedIds", List.of());
-            return new ClientSaveRequest(items, deletedIds);
-        }
-
-        throw new IllegalArgumentException("법인정보 저장 요청 형식이 올바르지 않습니다.");
+    @PatchMapping("/{id}")
+    ClientView patch(@PathVariable Long id, @Valid @RequestBody UpdateClientRequest request) {
+        return clientCommandUseCase.updateClient(new UpdateClientCommand(id, request.version(), request.status(), request.tier()));
     }
 
-    @SuppressWarnings("unchecked")
-    private List<ClientPayload> toClientPayloads(List<?> items) {
-        return items.stream()
-                .map(item -> {
-                    if (item instanceof ClientPayload payload) {
-                        return payload;
-                    }
+    public record CreateClientRequest(
+            @NotBlank String name,
+            @NotBlank String bizNo,
+            @NotNull ClientType type,
+            @NotNull ClientStatus status,
+            @NotNull ClientTier tier
+    ) {
+    }
 
-                    Map<String, Object> row = (Map<String, Object>) item;
-                    return new ClientPayload(
-                            String.valueOf(row.getOrDefault("id", "")),
-                            String.valueOf(row.getOrDefault("name", "")),
-                            String.valueOf(row.getOrDefault("bizNo", "")),
-                            String.valueOf(row.getOrDefault("type", "")),
-                            String.valueOf(row.getOrDefault("status", "")),
-                            String.valueOf(row.getOrDefault("tier", ""))
-                    );
-                })
-                .toList();
+    public record UpdateClientRequest(
+            @Positive long version,
+            ClientStatus status,
+            ClientTier tier
+    ) {
     }
 }

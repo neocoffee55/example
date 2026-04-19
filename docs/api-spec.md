@@ -1,510 +1,634 @@
-# Tax Workbench API 명세
+# API Specification
 
-이 문서는 현재 저장소에 구현되어 있는 백엔드 API를 기준으로 작성한 명세입니다.
+This document is the implementation contract for the Tax Workbench HTTP API.
 
-범위:
+## Scope
 
-- 로컬 개발용 API
-- WorkItem 생성/수정/삭제/조회
-- WorkItem bulk insert
-- WorkItem CSV streaming export
-- WorkItem 변경로그 조회
-- Client 조회 및 저장
-- optimistic locking 충돌 응답
+This API supports:
 
-기본 실행 기준:
+- large-scale work item listing
+- inline work item updates with optimistic locking
+- work item creation under client policy constraints
+- field-level audit history lookup
+- bulk import
+- filtered CSV export
+- client lookup and client status updates
 
-- Backend Base URL: `http://localhost:8081`
-- Frontend Dev Server: `http://localhost:8082`
-- 프론트는 `/api/...`로 호출하고 Vite가 백엔드로 프록시합니다.
+## Global Conventions
 
-## 공통 규칙
+### Base Path
 
-- Content-Type: `application/json`
-- 날짜 형식
-  - `dueDate`: `YYYY-MM-DD`
-  - `updatedAt`, `changedAt`: 백엔드 ISO timestamp 문자열
-- CORS
-  - 현재 백엔드는 `http://localhost:8082`을 허용합니다.
+- Base path: `/api`
 
-## 1. WorkItem API
+### Content Types
 
-### 1.1 WorkItem 조회
+- Request: `application/json`
+- Standard response: `application/json`
+- Export response: `text/csv`
 
-`GET /api/work-items`
+### Time And Date Format
 
-Query Parameter:
+- Timestamp fields use ISO-8601 UTC, for example `2026-04-16T11:25:00Z`
+- Date-only fields use `YYYY-MM-DD`, for example `2026-03-20`
 
-- `client`: 업체명 부분일치
-- `status`: 상태 정확일치
-- `assignee`: 담당자 부분일치
-- `dueDate`: `YYYY-MM-DD` 정확일치
+### IDs
 
-예시:
+- Resource IDs are numeric in the first version
 
-```http
-GET /api/work-items?client=Han&status=TODO&dueDate=2026-03-20
-```
+### Versioning And Concurrency
 
-응답 `200 OK`:
+- Every mutable `WorkItem` and `Client` carries a numeric `version`
+- Mutation requests must send the last observed `version`
+- If the stored version differs, the server returns `409 Conflict`
+
+### Pagination
+
+- Listing and audit history use cursor pagination
+- Request parameter: `cursor`
+- Request parameter: `pageSize`
+- Default `pageSize`: `50`
+- Maximum `pageSize`: `200`
+- Cursor is opaque to clients
+
+### Sorting
+
+- Multi-column sorting is supported where documented
+- Sort format: `field:direction,field:direction`
+- Direction values: `asc`, `desc`
+- Current backend slice supports cursor pagination only with the default work-item sort
+
+### Error Envelope
+
+Unless otherwise noted, error responses use this shape:
 
 ```json
-[
-  {
-    "id": "WI-10031",
-    "revision": 1,
-    "client": "Han River Holdings",
-    "bizNo": "123-45-67890",
-    "workType": "FILING",
-    "status": "TODO",
-    "assignee": "insu",
-    "dueDate": "2026-03-20",
-    "updatedAt": "2026-03-15T01:20:33.512Z"
+{
+  "code": "INVALID_REQUEST",
+  "message": "Human-readable summary",
+  "details": []
+}
+```
+
+## Enums
+
+### WorkItemType
+
+- `FILING`
+- `BOOKKEEPING`
+- `REVIEW`
+- `ETC`
+
+### WorkItemStatus
+
+- `TODO`
+- `IN_PROGRESS`
+- `DONE`
+- `HOLD`
+
+### ClientType
+
+- `INDIVIDUAL`
+- `CORPORATE`
+
+### ClientStatus
+
+- `ACTIVE`
+- `INACTIVE`
+
+### ClientTier
+
+- `BASIC`
+- `PREMIUM`
+- `VIP`
+
+### AuditSource
+
+- `INLINE_EDIT`
+- `CREATE`
+- `BULK_IMPORT`
+- `SYSTEM_RULE`
+- `CLIENT_POLICY_EFFECT`
+
+## Shared Models
+
+### WorkItemView
+
+```json
+{
+  "id": 101,
+  "clientId": 20,
+  "clientName": "Hanbit Tax",
+  "bizNo": "123-45-67890",
+  "type": "FILING",
+  "status": "TODO",
+  "assignee": "kim",
+  "dueDate": "2026-03-20",
+  "tags": ["march", "priority"],
+  "memo": "priority filing",
+  "updatedAt": "2026-04-16T11:22:00Z",
+  "version": 4,
+  "clientType": "CORPORATE",
+  "clientTier": "VIP",
+  "clientStatus": "ACTIVE"
+}
+```
+
+### ClientView
+
+```json
+{
+  "id": 20,
+  "name": "Hanbit Tax",
+  "bizNo": "123-45-67890",
+  "type": "CORPORATE",
+  "status": "ACTIVE",
+  "tier": "VIP",
+  "version": 2,
+  "updatedAt": "2026-04-16T11:10:00Z"
+}
+```
+
+### PageEnvelope
+
+```json
+{
+  "items": [],
+  "page": {
+    "nextCursor": "opaque-token",
+    "pageSize": 50,
+    "hasNext": true
   }
-]
-```
-
-참고:
-
-- 현재 백엔드 기본 정렬은 `clientName ASC`, `workType ASC`입니다.
-- 필터링은 현재 서비스 레이어에서 repository 조회 후 적용합니다.
-
-### 1.2 WorkItem 생성
-
-`POST /api/work-items`
-
-요청 본문:
-
-```json
-{
-  "id": "WI-1710000000000",
-  "revision": 0,
-  "client": "Han River Holdings",
-  "bizNo": "123-45-67890",
-  "workType": "FILING",
-  "status": "TODO",
-  "assignee": "insu",
-  "dueDate": "2026-03-20",
-  "changedBy": "insu"
 }
 ```
 
-응답 `200 OK`:
+## Filter Contract
 
-```json
-{
-  "id": "WI-1710000000000",
-  "revision": 0,
-  "client": "Han River Holdings",
-  "bizNo": "123-45-67890",
-  "workType": "FILING",
-  "status": "TODO",
-  "assignee": "insu",
-  "dueDate": "2026-03-20",
-  "updatedAt": "2026-03-15T01:22:00.210Z"
-}
-```
+Listing and export must use the same filter semantics.
 
-참고:
+### WorkItem Filters
 
-- 신규 WorkItem 생성 시에는 현재 audit log가 기록되지 않습니다.
+| Name | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `clientName` | string | No | Partial match, case-insensitive |
+| `statuses` | comma-separated enum list | No | Example: `TODO,HOLD` |
+| `assignees` | comma-separated string list | No | Exact match per token |
+| `dueDateFrom` | date | No | Inclusive |
+| `dueDateTo` | date | No | Inclusive |
+| `clientType` | enum | No | `INDIVIDUAL` or `CORPORATE` |
+| `clientTier` | enum | No | `BASIC`, `PREMIUM`, `VIP` |
+| `sort` | string | No | Multi-sort string |
+| `pageSize` | integer | No | Min `1`, max `200` |
+| `cursor` | string | No | Opaque token |
 
-### 1.3 WorkItem Bulk Insert
+### Allowed Sort Fields
 
-`POST /api/work-items/bulk`
+- `dueDate`
+- `clientName`
+- `status`
+- `assignee`
+- `updatedAt`
 
-요청 본문:
+### Default Sort
+
+- `dueDate:asc,clientName:asc,id:asc`
+
+## Endpoints
+
+## `GET /api/work-items`
+
+Lists work items for the workbench grid.
+
+### Query Parameters
+
+Uses the shared WorkItem filter contract.
+
+### Response `200 OK`
 
 ```json
 {
   "items": [
     {
-      "id": "WI-1710000000001",
-      "revision": 0,
-      "client": "Han River Holdings",
+      "id": 101,
+      "clientId": 20,
+      "clientName": "Hanbit Tax",
       "bizNo": "123-45-67890",
-      "workType": "FILING",
+      "type": "FILING",
       "status": "TODO",
-      "assignee": "insu",
+      "assignee": "kim",
       "dueDate": "2026-03-20",
-      "changedBy": "insu"
+      "tags": ["march"],
+      "memo": "priority filing",
+      "updatedAt": "2026-04-16T11:22:00Z",
+      "version": 4,
+      "clientType": "CORPORATE",
+      "clientTier": "VIP",
+      "clientStatus": "ACTIVE"
+    }
+  ],
+  "page": {
+    "nextCursor": "opaque-token-2",
+    "pageSize": 50,
+    "hasNext": true
+  }
+}
+```
+
+### Notes
+
+- Audit history is not embedded in this response
+- This endpoint must remain performant at large dataset sizes
+- If `cursor` is provided, `sort` must be omitted or match the default sort in the current backend slice
+
+## `POST /api/work-items`
+
+Creates a single work item.
+
+### Request Body
+
+```json
+{
+  "clientId": 20,
+  "type": "FILING",
+  "status": "TODO",
+  "assignee": "kim",
+  "dueDate": "2026-03-20",
+  "tags": ["march"],
+  "memo": "priority filing"
+}
+```
+
+### Validation Rules
+
+- `clientId` is required
+- `type` is required
+- `status` is required
+- `dueDate` is required
+- `tags` defaults to empty array if omitted
+- `memo` is optional
+- Client policy must be checked before creation
+
+### Response `201 Created`
+
+Returns `WorkItemView`.
+
+### Policy Errors
+
+- Inactive clients cannot receive new work items
+- VIP client work items require `assignee`
+- Client type may restrict allowed work item types
+
+## `PATCH /api/work-items/{id}`
+
+Updates mutable work item fields through operation-based inline edits.
+
+### Request Body
+
+```json
+{
+  "version": 4,
+  "operations": [
+    {
+      "field": "status",
+      "baseValue": "TODO",
+      "value": "IN_PROGRESS"
     },
     {
-      "id": "WI-1710000000002",
-      "revision": 0,
-      "client": "Mirae Clinic",
-      "bizNo": "220-11-90876",
-      "workType": "REVIEW",
-      "status": "TODO",
-      "assignee": "insu",
-      "dueDate": "2026-03-21",
-      "changedBy": "insu"
+      "field": "dueDate",
+      "baseValue": "2026-03-20",
+      "value": "2026-03-25"
     }
   ]
 }
 ```
 
-응답 `200 OK`:
+### Field Rules
+
+| Field | Value Type | Notes |
+| --- | --- | --- |
+| `status` | enum | Uses `WorkItemStatus` |
+| `dueDate` | date | `YYYY-MM-DD` |
+| `assignee` | string or null | Null may be rejected for VIP clients |
+| `memo` | string or null | Audited |
+| `tags` | array of strings | Full replacement semantics in v1 |
+
+### Constraints
+
+- `version` is required
+- `operations` must contain at least one item
+- `operations[].baseValue` is optional but recommended for richer conflict comparison UX
+- Unknown fields are rejected
+- All operations are applied atomically
+- All successful updates write audit entries for changed audited fields
+
+### Response `200 OK`
+
+Returns the updated `WorkItemView`.
+
+### Conflict Response `409 Conflict`
 
 ```json
 {
-  "totalCount": 2,
-  "successCount": 2,
-  "failureCount": 0,
-  "failures": []
+  "code": "WORK_ITEM_CONFLICT",
+  "message": "The work item was modified by another user.",
+  "resourceId": 101,
+  "currentVersion": 6,
+  "updatedBy": "alice",
+  "updatedAt": "2026-04-16T11:27:00Z",
+  "fieldConflicts": [
+    {
+      "field": "dueDate",
+      "baseValue": "2026-03-20",
+      "attemptedValue": "2026-03-25",
+      "currentValue": "2026-03-22"
+    }
+  ]
 }
 ```
 
-부분 실패 응답 예시:
+### Policy Failure Response `422 Unprocessable Entity`
 
 ```json
 {
-  "totalCount": 3,
-  "successCount": 2,
-  "failureCount": 1,
+  "code": "CLIENT_POLICY_VIOLATION",
+  "message": "VIP client work items require an assignee.",
+  "details": [
+    {
+      "field": "assignee",
+      "reason": "required_for_vip_client"
+    }
+  ]
+}
+```
+
+## `GET /api/work-items/{id}/audit-logs`
+
+Returns audit history for a single work item.
+
+### Query Parameters
+
+| Name | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `pageSize` | integer | No | Default `50`, max `200` |
+| `cursor` | string | No | Opaque token |
+
+### Response `200 OK`
+
+```json
+{
+  "items": [
+    {
+      "auditLogId": 8001,
+      "workItemId": 101,
+      "fieldName": "status",
+      "beforeValue": "TODO",
+      "afterValue": "IN_PROGRESS",
+      "actorId": "user-1",
+      "actorName": "kim",
+      "source": "INLINE_EDIT",
+      "changedAt": "2026-04-16T11:25:00Z"
+    }
+  ],
+  "page": {
+    "nextCursor": "opaque-token-2",
+    "pageSize": 50,
+    "hasNext": true
+  }
+}
+```
+
+### Notes
+
+- Ordered newest first
+- Uses a dedicated query path, not the listing path
+
+## `POST /api/work-items/bulk-import`
+
+Imports many work items in one request.
+
+### Request Body
+
+```json
+{
+  "requestId": "import-2026-04-16-001",
+  "items": [
+    {
+      "clientId": 20,
+      "type": "FILING",
+      "status": "TODO",
+      "assignee": "kim",
+      "dueDate": "2026-03-20",
+      "tags": ["march"],
+      "memo": "priority filing"
+    }
+  ]
+}
+```
+
+### Rules
+
+- `requestId` is required in v1 for retry traceability
+- `items` must contain at least one row
+- Row validation is independent per item
+- Partial success is allowed
+- Unknown clients, inactive clients, and VIP-without-assignee rows fail per row
+
+### Response `200 OK`
+
+```json
+{
+  "requestId": "import-2026-04-16-001",
+  "summary": {
+    "received": 2,
+    "created": 1,
+    "failed": 1
+  },
   "failures": [
     {
-      "index": 1,
-      "workItemId": "WI-10031",
-      "reason": "이미 존재하는 WorkItem id입니다."
+      "row": 2,
+      "code": "CLIENT_NOT_FOUND",
+      "message": "Client 99 does not exist."
     }
   ]
 }
 ```
 
-참고:
+### Notes
 
-- 요청은 chunk 단위로 나누어 저장합니다.
-- chunk 저장 실패 시 개별 row 저장으로 fallback 하여 부분 성공/실패를 구분합니다.
-- 설정값:
-  - `tax-workbench.bulk-insert.chunk-size`
-  - `tax-workbench.bulk-insert.max-request-size`
-- 신규 bulk insert도 현재 audit log는 남기지 않습니다.
+- Future versions may support async job execution for larger imports
+- Import-generated field changes must still write audit records
 
-### 1.4 WorkItem 수정
+## `GET /api/work-items/export`
 
-`PATCH /api/work-items/{id}`
+Streams the current filtered result set as CSV.
 
-Path Parameter:
+### Query Parameters
 
-- `id`: WorkItem id
+Uses the same filter contract as `GET /api/work-items`, except `pageSize` and `cursor` are ignored.
 
-요청 본문:
+### Response `200 OK`
 
-```json
-{
-  "id": "WI-10031",
-  "revision": 1,
-  "client": "Han River Holdings",
-  "bizNo": "123-45-67890",
-  "workType": "REVIEW",
-  "status": "TODO",
-  "assignee": "insu",
-  "dueDate": "2026-03-21",
-  "changedBy": "insu"
-}
-```
-
-응답 `200 OK`:
-
-```json
-{
-  "id": "WI-10031",
-  "revision": 2,
-  "client": "Han River Holdings",
-  "bizNo": "123-45-67890",
-  "workType": "REVIEW",
-  "status": "TODO",
-  "assignee": "insu",
-  "dueDate": "2026-03-21",
-  "updatedAt": "2026-03-15T01:24:11.892Z"
-}
-```
-
-참고:
-
-- `revision`을 기준으로 optimistic locking을 수행합니다.
-- 수정 성공 시 변경된 필드에 대해 audit log가 기록됩니다.
-
-### 1.5 WorkItem 삭제
-
-`DELETE /api/work-items/{id}?revision=...&changedBy=...`
-
-Path Parameter:
-
-- `id`: WorkItem id
-
-Query Parameter:
-
-- `revision`: 클라이언트가 알고 있는 현재 revision
-- `changedBy`: 선택값, 기본값은 `insu`
-
-예시:
-
-```http
-DELETE /api/work-items/WI-10031?revision=2&changedBy=insu
-```
-
-응답:
-
-- `200 OK`
-- 빈 본문
-
-참고:
-
-- 삭제도 optimistic locking revision 검사를 수행합니다.
-- 삭제 시에는 `beforeValue`만 채우고 `afterValue`는 빈 값으로 audit log를 기록합니다.
-
-### 1.6 WorkItem 변경로그 조회
-
-`GET /api/work-items/{id}/audit-logs`
-
-Path Parameter:
-
-- `id`: WorkItem id
-
-응답 `200 OK`:
-
-```json
-[
-  {
-    "workItemId": "WI-10031",
-    "revision": 2,
-    "changedAt": "2026-03-15T01:24:11.902Z",
-    "changedBy": "insu",
-    "fieldName": "workType",
-    "beforeValue": "FILING",
-    "afterValue": "REVIEW"
-  },
-  {
-    "workItemId": "WI-10031",
-    "revision": 2,
-    "changedAt": "2026-03-15T01:24:11.902Z",
-    "changedBy": "insu",
-    "fieldName": "dueDate",
-    "beforeValue": "2026-03-20",
-    "afterValue": "2026-03-21"
-  }
-]
-```
-
-참고:
-
-- `changedAt DESC` 기준 최신순으로 반환됩니다.
-- `fieldName`은 백엔드 필드 키 그대로 내려가고, 프론트에서 한글 헤더명으로 매핑합니다.
-
-### 1.7 WorkItem CSV Export
-
-`GET /api/work-items/export`
-
-Query Parameter:
-
-- `client`: 업체명 부분일치
-- `status`: 상태 정확일치
-- `assignee`: 담당자 부분일치
-- `dueDate`: `YYYY-MM-DD` 정확일치
-
-예시:
-
-```http
-GET /api/work-items/export?client=Han&status=TODO
-```
-
-응답:
-
-- `200 OK`
-- Content-Type: `text/csv;charset=UTF-8`
-- Content-Disposition: `attachment; filename="tax-workbench-export.csv"`
-
-CSV 헤더:
+Headers:
 
 ```text
-업체명,사업자번호,업무유형,상태,담당자,마감일,최근수정
+Content-Type: text/csv
+Content-Disposition: attachment; filename="work-items-2026-04-16.csv"
+Transfer-Encoding: chunked
 ```
 
-참고:
+### CSV Columns
 
-- 현재 필터 조건과 동일한 조건으로 CSV를 내려줍니다.
-- 응답은 `StreamingResponseBody` 기반으로 바로 쓰기/flush 하는 구조입니다.
-- UTF-8 BOM을 포함해서 엑셀에서 한글이 깨지지 않도록 처리합니다.
-- 현재 조회 자체는 repository 전체 조회 후 서비스 레이어에서 필터링/정렬합니다.
+Columns in v1:
 
-## 2. Client API
+- `id`
+- `clientName`
+- `bizNo`
+- `type`
+- `status`
+- `assignee`
+- `dueDate`
+- `tags`
+- `memo`
+- `updatedAt`
+- `clientType`
+- `clientTier`
+- `clientStatus`
 
-### 2.1 Client 조회
+### Rules
 
-`GET /api/clients`
+- Must stream directly without loading the full result into memory
+- Must reflect the current filter contract used by listing
+- Sort order must match the supplied sort query
 
-Query Parameter:
+## `GET /api/clients`
 
-- `keyword`: 업체명 또는 사업자번호 부분일치
+Lists clients for lookup and assignment flows.
 
-예시:
+### Query Parameters
 
-```http
-GET /api/clients?keyword=123-45
-```
+| Name | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `name` | string | No | Partial match |
+| `status` | enum | No | `ACTIVE` or `INACTIVE` |
+| `type` | enum | No | `INDIVIDUAL` or `CORPORATE` |
+| `tier` | enum | No | `BASIC`, `PREMIUM`, `VIP` |
+| `pageSize` | integer | No | Default `50`, max `200` |
+| `cursor` | string | No | Opaque token |
 
-응답 `200 OK`:
-
-```json
-[
-  {
-    "id": "CL-1001",
-    "name": "Han River Holdings",
-    "bizNo": "123-45-67890",
-    "type": "CORPORATE",
-    "status": "ACTIVE",
-    "tier": "VIP",
-    "updatedAt": "2026-03-15T01:10:00.001Z"
-  }
-]
-```
-
-### 2.2 Client 저장
-
-`PUT /api/clients`
-
-요청 본문:
-
-```json
-[
-  {
-    "id": "CL-1001",
-    "name": "Han River Holdings",
-    "bizNo": "123-45-67890",
-    "type": "CORPORATE",
-    "status": "ACTIVE",
-    "tier": "VIP"
-  },
-  {
-    "id": "CL-1710000000000",
-    "name": "New Client",
-    "bizNo": "111-22-33333",
-    "type": "CORPORATE",
-    "status": "ACTIVE",
-    "tier": "BASIC"
-  }
-]
-```
-
-응답 `200 OK`:
-
-```json
-[
-  {
-    "id": "CL-1001",
-    "name": "Han River Holdings",
-    "bizNo": "123-45-67890",
-    "type": "CORPORATE",
-    "status": "ACTIVE",
-    "tier": "VIP",
-    "updatedAt": "2026-03-15T01:30:10.112Z"
-  },
-  {
-    "id": "CL-1710000000000",
-    "name": "New Client",
-    "bizNo": "111-22-33333",
-    "type": "CORPORATE",
-    "status": "ACTIVE",
-    "tier": "BASIC",
-    "updatedAt": "2026-03-15T01:30:10.112Z"
-  }
-]
-```
-
-참고:
-
-- 현재 Client 저장은 row 단위가 아니라 전체 교체형 sync 모델입니다.
-- 백엔드는 기존 Client 데이터를 batch delete 후, 요청 본문 전체를 다시 저장합니다.
-
-## 3. 충돌 응답
-
-WorkItem 수정 또는 삭제 시 오래된 `revision`으로 요청하면 백엔드는 `409 Conflict`를 반환합니다.
-
-응답 형식:
+### Response `200 OK`
 
 ```json
 {
-  "entityId": "WI-10031",
-  "serverRevision": 3,
-  "conflictFields": ["workType", "dueDate"],
-  "serverSnapshot": {
-    "client": "Han River Holdings",
-    "bizNo": "123-45-67890",
-    "workType": "BOOKKEEPING",
-    "status": "TODO",
-    "assignee": "insu",
-    "dueDate": "2026-03-22"
-  },
-  "attemptedChanges": {
-    "client": "Han River Holdings",
-    "bizNo": "123-45-67890",
-    "workType": "REVIEW",
-    "status": "TODO",
-    "assignee": "insu",
-    "dueDate": "2026-03-21"
-  },
-  "message": "Work item was modified by another request."
+  "items": [
+    {
+      "id": 20,
+      "name": "Hanbit Tax",
+      "bizNo": "123-45-67890",
+      "type": "CORPORATE",
+      "status": "ACTIVE",
+      "tier": "VIP",
+      "version": 2,
+      "updatedAt": "2026-04-16T11:10:00Z"
+    }
+  ],
+  "page": {
+    "nextCursor": null,
+    "pageSize": 50,
+    "hasNext": false
+  }
 }
 ```
 
-의미:
+## `POST /api/clients`
 
-- `entityId`: 충돌이 발생한 WorkItem id
-- `serverRevision`: 서버의 최신 revision
-- `conflictFields`: 서버 값과 요청 값이 다른 필드 목록
-- `serverSnapshot`: 서버 기준 최신 값
-- `attemptedChanges`: 클라이언트가 보낸 값
-- `message`: 충돌 메시지
+Creates a client.
 
-## 4. 필드 기준
+### Request Body
 
-### WorkItem 필드
+```json
+{
+  "name": "Hanbit Tax",
+  "bizNo": "123-45-67890",
+  "type": "CORPORATE",
+  "status": "ACTIVE",
+  "tier": "VIP"
+}
+```
 
-- `id`: string
-- `revision`: number
-- `client`: string
-- `bizNo`: string
-- `workType`: `FILING | BOOKKEEPING | REVIEW | ETC`
-- `status`: `TODO | IN_PROGRESS | DONE | HOLD`
-- `assignee`: string
-- `dueDate`: `YYYY-MM-DD`
-- `updatedAt`: timestamp string
+### Response `201 Created`
 
-### Client 필드
+Returns `ClientView`.
 
-- `id`: string
-- `name`: string
-- `bizNo`: string
-- `type`: `CORPORATE | INDIVIDUAL`
-- `status`: `ACTIVE | INACTIVE`
-- `tier`: `BASIC | PREMIUM | VIP`
-- `updatedAt`: timestamp string
+## `PATCH /api/clients/{id}`
 
-### WorkItemAudit 필드
+Updates client mutable fields in v1, primarily `status` and `tier`.
 
-- `workItemId`: string
-- `revision`: number
-- `changedAt`: timestamp string
-- `changedBy`: string
-- `fieldName`: string
-- `beforeValue`: string
-- `afterValue`: string
+### Request Body
 
-## 5. 현재 한계
+```json
+{
+  "version": 2,
+  "status": "INACTIVE",
+  "tier": "VIP"
+}
+```
 
-- WorkItem 목록 조회는 아직 DB 주도 페이징이 아닙니다.
-- Client 저장은 아직 row 단위 API가 아닙니다.
-- 정식 OpenAPI 문서는 아직 없습니다.
-- 입력 검증은 현재 UI 동작에 맞춘 수준으로 가볍습니다.
-- CSV Export는 streaming 응답이지만, 대용량 최적화를 위한 DB cursor/fetch 기반 구현은 아직 아닙니다.
+### Rules
 
-## 6. 문서 기준 소스
+- `version` is required
+- Unknown mutable fields are rejected
+- Status changes affect future work item creation immediately
+- Tier changes affect future work item validation immediately
 
-이 문서는 현재 구현 기준으로 다음 파일을 기준으로 작성했습니다.
+### Response `200 OK`
 
-- [WorkItemController.java](/Users/insu_han/IdeaProjects/example/backend/src/main/java/com/taxworkbench/interfaces/http/WorkItemController.java)
-- [ClientController.java](/Users/insu_han/IdeaProjects/example/backend/src/main/java/com/taxworkbench/interfaces/http/ClientController.java)
-- [ApiExceptionHandler.java](/Users/insu_han/IdeaProjects/example/backend/src/main/java/com/taxworkbench/interfaces/http/ApiExceptionHandler.java)
-- [WorkbenchDataService.java](/Users/insu_han/IdeaProjects/example/backend/src/main/java/com/taxworkbench/application/WorkbenchDataService.java)
+Returns `ClientView`.
+
+### Conflict Response `409 Conflict`
+
+```json
+{
+  "code": "CLIENT_CONFLICT",
+  "message": "The client was modified by another user.",
+  "resourceId": 20,
+  "currentVersion": 3,
+  "updatedBy": "alice",
+  "updatedAt": "2026-04-16T11:30:00Z",
+  "fieldConflicts": []
+}
+```
+
+## Error Taxonomy
+
+| Code | Meaning | HTTP Status |
+| --- | --- | --- |
+| `INVALID_REQUEST` | Request shape or value invalid | `400` |
+| `WORK_ITEM_NOT_FOUND` | Referenced work item does not exist | `404` |
+| `CLIENT_NOT_FOUND` | Referenced client does not exist | `404` |
+| `WORK_ITEM_CONFLICT` | Version mismatch on work item update | `409` |
+| `CLIENT_CONFLICT` | Version mismatch on client update | `409` |
+| `CLIENT_POLICY_VIOLATION` | Client tier, type, or status blocked the action | `422` |
+| `WORK_ITEM_POLICY_VIOLATION` | Work item transition blocked by domain rule | `422` |
+| `BULK_IMPORT_PARTIAL_FAILURE` | Import completed with row failures | `200` |
+
+## Audit Coverage
+
+The following fields must generate audit records when changed:
+
+- `status`
+- `dueDate`
+- `assignee`
+- `memo`
+- `tags`
+- `clientId`
+
+The following fields are not audited directly:
+
+- `updatedAt`
+- `version`
+
+## Implementation Notes
+
+- Listing and export must share filter parsing code
+- Listing and audit history must use separate query paths
+- Mutation handlers must apply policy validation before persistence commit
+- Conflict responses must preserve enough state for client-side merge UI

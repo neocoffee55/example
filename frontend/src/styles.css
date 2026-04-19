@@ -1,21 +1,27 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 :root {
-  color-scheme: light;
-  font-family: "IBM Plex Sans", "Pretendard", sans-serif;
+  color: #132238;
   background:
-    radial-gradient(circle at top left, rgba(240, 222, 173, 0.75), transparent 30%),
-    linear-gradient(180deg, #f7f3ea 0%, #efe7d8 100%);
-  color: #1f2937;
+    radial-gradient(circle at top, rgba(162, 76, 47, 0.12), transparent 35%),
+    linear-gradient(180deg, #f6f0e5 0%, #f4f4ef 100%);
+  font-family: "Segoe UI", system-ui, sans-serif;
 }
 
 body {
   margin: 0;
-  min-width: 320px;
   min-height: 100vh;
-  background: transparent;
 }
 
-#root {
-  min-height: 100vh;
+* {
+  box-sizing: border-box;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
 }

@@ -1,35 +1,49 @@
 package com.taxworkbench.bootstrap;
 
+import com.taxworkbench.domain.shared.ClientStatus;
+import com.taxworkbench.domain.shared.ClientTier;
+import com.taxworkbench.domain.shared.ClientType;
+import com.taxworkbench.domain.shared.WorkItemStatus;
+import com.taxworkbench.domain.shared.WorkItemType;
 import com.taxworkbench.infrastructure.persistence.ClientEntity;
 import com.taxworkbench.infrastructure.persistence.ClientJpaRepository;
 import com.taxworkbench.infrastructure.persistence.WorkItemEntity;
 import com.taxworkbench.infrastructure.persistence.WorkItemJpaRepository;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.util.List;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+
 @Configuration
-class SeedDataConfig {
+public class SeedDataConfig {
 
     @Bean
-    CommandLineRunner seedWorkbenchData(ClientJpaRepository clientRepository, WorkItemJpaRepository workItemRepository) {
-        return args -> {
-            if (clientRepository.count() == 0) {
-                clientRepository.saveAll(List.of(
-                        new ClientEntity("CL-1001", "Han River Holdings", "123-45-67890", "CORPORATE", "ACTIVE", "VIP", Instant.now()),
-                        new ClientEntity("CL-1002", "Mirae Clinic", "220-11-90876", "CORPORATE", "ACTIVE", "PREMIUM", Instant.now())
-                ));
+    CommandLineRunner seedData(ClientJpaRepository clientJpaRepository, WorkItemJpaRepository workItemJpaRepository) {
+        return ignored -> {
+            if (clientJpaRepository.count() > 0 || workItemJpaRepository.count() > 0) {
+                return;
             }
 
-            if (workItemRepository.count() == 0) {
-                workItemRepository.saveAll(List.of(
-                        new WorkItemEntity("WI-10031", "Han River Holdings", "123-45-67890", "FILING", "IN_PROGRESS", "insu", LocalDate.parse("2026-03-20"), Instant.now(), 0L),
-                        new WorkItemEntity("WI-10032", "Mirae Clinic", "220-11-90876", "REVIEW", "HOLD", "jane", LocalDate.parse("2026-03-18"), Instant.now(), 0L)
-                ));
-            }
+            ClientEntity client = new ClientEntity();
+            client.setName("Hanbit Tax");
+            client.setBizNo("123-45-67890");
+            client.setType(ClientType.CORPORATE);
+            client.setStatus(ClientStatus.ACTIVE);
+            client.setTier(ClientTier.VIP);
+            ClientEntity savedClient = clientJpaRepository.save(client);
+
+            WorkItemEntity workItem = new WorkItemEntity();
+            workItem.setClient(savedClient);
+            workItem.setType(WorkItemType.FILING);
+            workItem.setStatus(WorkItemStatus.TODO);
+            workItem.setAssignee("kim");
+            workItem.setDueDate(LocalDate.parse("2026-03-20"));
+            workItem.setTags(new ArrayList<>(List.of("march")));
+            workItem.setMemo("priority filing");
+            workItemJpaRepository.save(workItem);
         };
     }
 }

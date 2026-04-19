@@ -1,113 +1,129 @@
 package com.taxworkbench.infrastructure.persistence;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
-import jakarta.persistence.Version;
+import com.taxworkbench.domain.shared.WorkItemStatus;
+import com.taxworkbench.domain.shared.WorkItemType;
+import jakarta.persistence.*;
+
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
-@Table(name = "work_item")
+@Table(name = "work_items")
 public class WorkItemEntity {
 
     @Id
-    private String id;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
-    @Column(name = "client_name", nullable = false)
-    private String clientName;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "client_id", nullable = false)
+    private ClientEntity client;
 
-    @Column(name = "biz_no", nullable = false)
-    private String bizNo;
-
-    @Column(name = "work_type", nullable = false)
-    private String workType;
-
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private WorkItemType type;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
+    private WorkItemStatus status;
+
+    @Column
     private String assignee;
 
-    @Column(name = "due_date")
+    @Column(nullable = false)
     private LocalDate dueDate;
 
-    @Column(name = "updated_at", nullable = false)
-    private Instant updatedAt;
+    @ElementCollection
+    @CollectionTable(name = "work_item_tags", joinColumns = @JoinColumn(name = "work_item_id"))
+    @Column(name = "tag_value", nullable = false)
+    private List<String> tags = new ArrayList<>();
+
+    @Column(length = 4000)
+    private String memo;
 
     @Version
+    private long version;
+
     @Column(nullable = false)
-    private long revision;
+    private Instant updatedAt;
 
-    protected WorkItemEntity() {
+    @PrePersist
+    @PreUpdate
+    void touch() {
+        updatedAt = Instant.now();
     }
 
-    public WorkItemEntity(
-            String id,
-            String clientName,
-            String bizNo,
-            String workType,
-            String status,
-            String assignee,
-            LocalDate dueDate,
-            Instant updatedAt,
-            long revision
-    ) {
-        this.id = id;
-        this.clientName = clientName;
-        this.bizNo = bizNo;
-        this.workType = workType;
-        this.status = status;
-        this.assignee = assignee;
-        this.dueDate = dueDate;
-        this.updatedAt = updatedAt;
-        this.revision = revision;
-    }
-
-    public String getId() {
+    public Long getId() {
         return id;
     }
 
-    public String getClientName() {
-        return clientName;
+    public void setId(Long id) {
+        this.id = id;
     }
 
-    public String getBizNo() {
-        return bizNo;
+    public ClientEntity getClient() {
+        return client;
     }
 
-    public String getWorkType() {
-        return workType;
+    public void setClient(ClientEntity client) {
+        this.client = client;
     }
 
-    public String getStatus() {
+    public WorkItemType getType() {
+        return type;
+    }
+
+    public void setType(WorkItemType type) {
+        this.type = type;
+    }
+
+    public WorkItemStatus getStatus() {
         return status;
+    }
+
+    public void setStatus(WorkItemStatus status) {
+        this.status = status;
     }
 
     public String getAssignee() {
         return assignee;
     }
 
+    public void setAssignee(String assignee) {
+        this.assignee = assignee;
+    }
+
     public LocalDate getDueDate() {
         return dueDate;
     }
 
+    public void setDueDate(LocalDate dueDate) {
+        this.dueDate = dueDate;
+    }
+
+    public List<String> getTags() {
+        return tags;
+    }
+
+    public void setTags(List<String> tags) {
+        this.tags = tags;
+    }
+
+    public String getMemo() {
+        return memo;
+    }
+
+    public void setMemo(String memo) {
+        this.memo = memo;
+    }
+
+    public long getVersion() {
+        return version;
+    }
+
     public Instant getUpdatedAt() {
         return updatedAt;
-    }
-
-    public long getRevision() {
-        return revision;
-    }
-
-    public void update(String clientName, String bizNo, String workType, String status, String assignee, LocalDate dueDate, Instant updatedAt) {
-        this.clientName = clientName;
-        this.bizNo = bizNo;
-        this.workType = workType;
-        this.status = status;
-        this.assignee = assignee;
-        this.dueDate = dueDate;
-        this.updatedAt = updatedAt;
     }
 }
